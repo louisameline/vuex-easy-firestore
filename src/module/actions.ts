@@ -868,7 +868,7 @@ export default function (Firebase: any): AnyObject {
       // check userId
       dispatch('setUserId')
       // add id to value
-      if (!value.id) value.id = id
+      //if (!value.id) value.id = id
       // define the firestore update
       function firestoreUpdateFn (_val) {
         return dispatch('patchDoc', {id, doc: copy(_val)})

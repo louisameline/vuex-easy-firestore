@@ -93,7 +93,8 @@ export default function (Firebase: any): AnyObject {
           state._conf.serverChange.convertTimestamps,
         )
         const cleanDoc = setDefaultValues(doc, defaultValues)
-        cleanDoc.id = id
+        //cleanDoc.id = id
+        delete doc.updatedAt
         return cleanDoc
       },
     prepareForPatch: (state, getters, rootState, rootGetters) =>
@@ -120,7 +121,7 @@ export default function (Firebase: any): AnyObject {
           const itemToUpdate = flatten(cleanedPatchData)
           // add id (required to get ref later at apiHelpers.ts)
           // @ts-ignore
-          itemToUpdate.id = id
+          //itemToUpdate.id = id
           carry[id] = itemToUpdate
           return carry
         }, {})
@@ -153,8 +154,8 @@ export default function (Firebase: any): AnyObject {
         // add fillable and guard defaults
         return items.reduce((carry, item) => {
           // set default fields
-          item.created_at = new Date()
-          item.created_by = state._sync.userId
+          //item.created_at = new Date()
+          //item.created_by = state._sync.userId
           // clean up item
           item = filter(item, getters.fillables, getters.guard)
           carry.push(item)
@@ -165,9 +166,9 @@ export default function (Firebase: any): AnyObject {
       (doc) => {
         // add fillable and guard defaults
         // set default fields
-        doc.created_at = new Date()
-        doc.created_by = state._sync.userId
-        doc.id = getters.docModeId
+        //doc.created_at = new Date()
+        //doc.created_by = state._sync.userId
+        //doc.id = getters.docModeId
         // clean up item
         doc = filter(doc, getters.fillables, getters.guard)
         return doc
