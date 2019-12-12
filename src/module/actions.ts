@@ -20,6 +20,8 @@ import logError from './errors'
  * @returns {AnyObject} the actions object
  */
 export default function (Firebase: any): AnyObject {
+  // this is outside of openDBChannel to work across several channels
+  let previousSnapshotData = {}
   return {
     setUserId: ({commit, getters}, userId) => {
       if (userId === undefined) userId = null
@@ -491,7 +493,7 @@ export default function (Firebase: any): AnyObject {
     },
     openDBChannel (
       {getters, state, commit, dispatch},
-      parameters: any = {clauses: {}, pathVariables: {}, includeMetadataChanges: false}
+      parameters: any = {clauses: {}, pathVariables: {}}
     ) {
       if (!isPlainObject(parameters)) parameters = {}
       /* COMPATIBILITY START
@@ -499,7 +501,7 @@ export default function (Firebase: any): AnyObject {
        * clauses directly at the root of the `parameters` object. Can be removed in
        * a later version
        */
-      if (!parameters.clauses && !parameters.pathVariables && parameters.includeMetadataChanges === undefined) {
+      if (!parameters.clauses && !parameters.pathVariables) {
         const pathVariables = Object.assign({}, parameters)
         // @ts-ignore
         delete pathVariables.where
@@ -510,16 +512,12 @@ export default function (Firebase: any): AnyObject {
             delete pathVariables[entry[0]]
           }
         })
-        parameters = Object.assign(
-          {includeMetadataChanges: parameters.includeMetadataChanges || false},
-          {clauses: parameters, pathVariables}
-        )
+        parameters = {clauses: parameters, pathVariables}
       }
       /* COMPATIBILITY END */
       const defaultParameters = {
         clauses: {},
-        pathVariables: {},
-        includeMetadataChanges: false
+        pathVariables: {}
       }
       parameters = Object.assign(defaultParameters, parameters)
       dispatch('setUserId')
@@ -582,7 +580,6 @@ export default function (Firebase: any): AnyObject {
       const streamingPromise = nicePromise()
       let gotFirstLocalResponse = false
       let gotFirstServerResponse = false
-      const includeMetadataChanges = parameters.includeMetadataChanges
       const streamingStart = () => {
         // create a promise for the life of the snapshot that can be resolved from
         // outside its scope. This promise will be resolved when the user calls
@@ -590,7 +587,7 @@ export default function (Firebase: any): AnyObject {
         // error() callback
         state._sync.streaming[identifier] = streamingPromise
         initialPromise.resolve({
-          refreshed: includeMetadataChanges ? refreshedPromise : null,
+          refreshed: refreshedPromise,
           streaming: streamingPromise,
           stop: () => dispatch('closeDBChannel', { _identifier: identifier })
         })
@@ -610,49 +607,95 @@ export default function (Firebase: any): AnyObject {
         state._sync.unsubscribe[identifier] = null
         state._sync.streaming[identifier] = null
       }
-      const processDocument = data => {
-        const doc = getters.cleanUpRetrievedDoc(data, getters.docModeId)
-        dispatch('applyHooksAndUpdateState', {change: 'modified', id: getters.docModeId, doc})
+      const processDocument = (documentSnapshot, changeType = 'modified') => {
+        const data = documentSnapshot.data()
+        const dataJSON = JSON.stringify(data)
+        const previousDataJSON = previousSnapshotData[documentSnapshot.id]
+        // this condition lets us ignore the irrelevant "metadata-only changes" events
+        // that we get since `includeMetadataChanges` is `true` and that are meaningless
+        // for our local store. As a nice side effect, it will also ignore most "data
+        // changes" which actually didn't alter the data, including across several
+        // channels. Some rare false positives may still happen as this isn't a deep
+        // equal, but at least it's fast.
+        // We check if the initial promise is pending as the channel could be opened
+        // as we already have the data in memory, in which case we need to make sure
+        // the state is populated and the hook callback called.
+        // Note: `snapshot.isEqual` can't be used: it's useless as a different
+        // `fromCache` value makes it return false
+        if (initialPromise.isPending || !previousDataJSON || previousDataJSON !== dataJSON) {
+          const doc = getters.cleanUpRetrievedDoc(data, documentSnapshot.id)
+          dispatch('applyHooksAndUpdateState', {change: changeType, id: documentSnapshot.id, doc})
+          previousSnapshotData[documentSnapshot.id] = dataJSON
+        }
       }
       const processCollection = docChanges => {
         docChanges.forEach(change => {
-          const doc = getters.cleanUpRetrievedDoc(change.doc.data(), change.doc.id)
-          dispatch('applyHooksAndUpdateState', {change: change.type, id: change.doc.id, doc})
+          processDocument(change.doc, change.type)
         })
       }
       const unsubscribe = dbRef.onSnapshot(
-        { includeMetadataChanges },
-        async querySnapshot => {
-          // if the data comes from cache
-          if (querySnapshot.metadata.fromCache) {
+        // this allows us to set the `gotFirstServerResponse` variable accurately, but
+        // most of all to make the `refreshed` promise work well. Without it, the first
+        // actual server response may not trigger the `onSnapshot()` callback
+        {includeMetadataChanges: true},
+        // this is either a documentSnapshot or a querySnapshot
+        async snapshot => {
+          // if the data comes from cache. Note: the first call **always** has it `true`
+          if (snapshot.metadata.fromCache) {
             // if it's the very first call, we are at the initial app load. If so, we'll use
-            // the data in cache (if available) to populate the state.
-            // if it's not, this is only the result of a local modification which does not
-            // require to do anything else.
+            // the data in cache (if available) to populate the state
             if (!gotFirstLocalResponse) {
               // 'doc' mode:
               if (!getters.collectionMode) {
-                // note: we don't want to insert a document ever when the data comes from cache,
-                // and we don't want to start the app if the data doesn't exist (no persistence)
-                if (querySnapshot.data()) {
-                  processDocument(querySnapshot.data())
+                // we don't want to resolve the initial promise without data.
+                // note: there is no data if it was never loaded or if there is no persistence
+                // on the device, so at this point we don't want to insert an initial document
+                if (snapshot.exists) {
+                  processDocument(snapshot)
                   streamingStart()
                 }
               }
               // 'collection' mode
               else {
-                processCollection(querySnapshot.docChanges())
+                processCollection(snapshot.docChanges())
                 streamingStart()
               }
               gotFirstLocalResponse = true
             }
+            // not the first local call we get: this is the result of a local modification
+            // which doesn't require to do anything more to the state, we just need to
+            // store the snapshot for comparison when we get the server response
+            else {
+              // 'doc' mode:
+              if (!getters.collectionMode) {
+                previousSnapshotData[snapshot.id] = JSON.stringify(snapshot.data())
+              }
+              // 'collection' mode
+              else {
+                snapshot.docChanges().forEach(change => {
+                  previousSnapshotData[change.doc.id] = JSON.stringify(change.doc.data())
+                })
+              }
+            }
           }
-          // if data comes from server
+          // if the data comes from the server
           else {
             // 'doc' mode:
             if (!getters.collectionMode) {
-              // if the document doesn't exist yet
-              if (!querySnapshot.exists) {
+              // if the remote document exists: apply to the local store
+              if (snapshot.exists) {
+                processDocument(snapshot)
+                // the promise is still pending at this point only if the doc couldn't be loaded
+                // from cache (no persistence, or never previously loaded)
+                if (initialPromise.isPending) {
+                  streamingStart()
+                }
+                if (refreshedPromise.isPending) {
+                  refreshedPromise.resolve()
+                }
+              }
+              // the document doesn't exist yet
+              else {
                 // if it's ok to insert an initial document
                 if (!state._conf.sync.preventInitialDocInsertion) {
                   if (state._conf.logging) {
@@ -687,22 +730,10 @@ export default function (Firebase: any): AnyObject {
                   streamingStop('preventInitialDocInsertion')
                 }
               }
-              // the remote document exists: apply to the local store
-              else {
-                processDocument(querySnapshot.data())
-                if (initialPromise.isPending) {
-                  streamingStart()
-                }
-                // the promise should still be pending at this point only if there is no persistence,
-                // as only then the first call to our listener will have `fromCache` === `false`
-                if (refreshedPromise.isPending) {
-                  refreshedPromise.resolve()
-                }
-              }
             }
             // 'collection' mode:
             else {
-              processCollection(querySnapshot.docChanges())
+              processCollection(snapshot.docChanges())
               if (initialPromise.isPending) {
                 streamingStart()
               }
@@ -716,7 +747,6 @@ export default function (Firebase: any): AnyObject {
         streamingStop
       )
       state._sync.unsubscribe[identifier] = unsubscribe
-
       return initialPromise
     },
     closeDBChannel ({getters, state, commit, dispatch}, { clearModule = false, _identifier = null } = { clearModule: false, _identifier: null }) {
