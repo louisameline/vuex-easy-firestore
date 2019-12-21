@@ -15,7 +15,7 @@ declare const _default: {
             };
         };
         insertHook: (updateStore: any, doc: any, store: any) => any;
-        patchHook: (updateStore: any, doc: any, store: any) => any;
+        patchHook: (updateStore: any, doc: any, store: any) => Promise<unknown>;
         deleteHook: (updateStore: any, id: any, store: any) => any;
     };
     state: {
