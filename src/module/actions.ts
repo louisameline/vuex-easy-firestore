@@ -392,7 +392,9 @@ export default function (Firebase: any): AnyObject {
           }
           const id = getters.docModeId
           const doc = getters.cleanUpRetrievedDoc(_doc.data(), id)
-          dispatch('applyHooksAndUpdateState', {change: 'modified', id, doc})
+          await dispatch('applyHooksAndUpdateState', {change: 'modified', id, doc})
+          // TODO: return the doc edited by the action above, which may be different from
+          // `doc` if it wasn't the original object itself that was edited
           return doc
         }).catch(error => {
           logError(error)
@@ -405,9 +407,10 @@ export default function (Firebase: any): AnyObject {
           if (querySnapshot.done === true) return querySnapshot
           if (isFunction(querySnapshot.forEach)) {
             querySnapshot.forEach(_doc => {
-              const id = _doc.id
-              const doc = getters.cleanUpRetrievedDoc(_doc.data(), id)
-              dispatch('applyHooksAndUpdateState', {change: 'added', id, doc})
+              const doc = getters.cleanUpRetrievedDoc(_doc.data(), _doc.id)
+              dispatch('applyHooksAndUpdateState', {change: 'added', id: _doc.id, doc})
+                // silent error if a hook aborted the insertion
+                .catch(() => {})
             })
           }
           return querySnapshot
@@ -425,7 +428,8 @@ export default function (Firebase: any): AnyObject {
           }
         }
         const doc = getters.cleanUpRetrievedDoc(_doc.data(), id)
-        dispatch('applyHooksAndUpdateState', {change: 'added', id, doc})
+        await dispatch('applyHooksAndUpdateState', {change: 'added', id, doc})
+        // TODO: same as `fetchAndAdd`
         return doc
       } catch (e) {
         return logError(e)
@@ -435,29 +439,37 @@ export default function (Firebase: any): AnyObject {
       {getters, state, commit, dispatch},
       {change, id, doc = {}}: {change: 'added' | 'removed' | 'modified', id: string, doc: AnyObject}
     ) {
-      const store = this
-      // define storeUpdateFn()
-      function storeUpdateFn (_doc) {
-        switch (change) {
-          case 'added':
-            commit('INSERT_DOC', _doc)
-            break
-          case 'removed':
-            commit('DELETE_DOC', id)
-            break
-          default:
-            dispatch('deleteMissingProps', _doc)
-            commit('PATCH_DOC', _doc)
-            break
+      return new Promise((resolve, reject) => {
+        const store = this
+        // define storeUpdateFn()
+        function storeUpdateFn (_doc) {
+          if (_doc) {
+            switch (change) {
+              case 'added':
+                commit('INSERT_DOC', _doc)
+                break
+              case 'removed':
+                commit('DELETE_DOC', id)
+                break
+              default:
+                dispatch('deleteMissingProps', _doc)
+                commit('PATCH_DOC', _doc)
+                break
+            }
+            resolve()
+          }
+          else {
+            reject(new Error('user-aborted'))
+          }
         }
-      }
-      // get user set sync hook function
-      const syncHookFn = state._conf.serverChange[change + 'Hook']
-      if (isFunction(syncHookFn)) {
-        syncHookFn(storeUpdateFn, doc, id, store, 'server', change)
-      } else {
-        storeUpdateFn(doc)
-      }
+        // get user set sync hook function
+        const syncHookFn = state._conf.serverChange[change + 'Hook']
+        if (isFunction(syncHookFn)) {
+          syncHookFn(storeUpdateFn, doc, id, store, 'server', change)
+        } else {
+          storeUpdateFn(doc)
+        }
+      })
     },
     deleteMissingProps ({getters, commit}, doc) {
       const defaultValues = getters.defaultValues
@@ -611,6 +623,7 @@ export default function (Firebase: any): AnyObject {
         const data = documentSnapshot.data()
         const dataJSON = JSON.stringify(data)
         const previousDataJSON = previousSnapshotData[documentSnapshot.id]
+        let response = Promise.resolve()
         // this condition lets us ignore the irrelevant "metadata-only changes" events
         // that we get since `includeMetadataChanges` is `true` and that are meaningless
         // for our local store. As a nice side effect, it will also ignore most "data
@@ -624,14 +637,20 @@ export default function (Firebase: any): AnyObject {
         // `fromCache` value makes it return false
         if (initialPromise.isPending || !previousDataJSON || previousDataJSON !== dataJSON) {
           const doc = getters.cleanUpRetrievedDoc(data, documentSnapshot.id)
-          dispatch('applyHooksAndUpdateState', {change: changeType, id: documentSnapshot.id, doc})
+          response = dispatch('applyHooksAndUpdateState', {change: changeType, id: documentSnapshot.id, doc})
           previousSnapshotData[documentSnapshot.id] = dataJSON
         }
+        return response
       }
       const processCollection = docChanges => {
+        const promises = []
         docChanges.forEach(change => {
-          processDocument(change.doc, change.type)
+          const p = processDocument(change.doc, change.type)
+          promises.push(p)
         })
+        // make Promise.all resolve when all promises are settled
+        const settledPromises = promises.map(p => p.catch(() => {}))
+        return Promise.all(settledPromises)
       }
       const unsubscribe = dbRef.onSnapshot(
         // this allows us to set the `gotFirstServerResponse` variable accurately, but
@@ -652,13 +671,16 @@ export default function (Firebase: any): AnyObject {
                 // on the device, so at this point we don't want to insert an initial document
                 if (snapshot.exists) {
                   processDocument(snapshot)
-                  streamingStart()
+                    .then(streamingStart)
                 }
               }
               // 'collection' mode
               else {
                 processCollection(snapshot.docChanges())
-                streamingStart()
+                  // rejected if the insertion of some documents was aborted by the user callback
+                  .catch(() => {})
+                  // fullfill anyway
+                  .then(streamingStart)
               }
               gotFirstLocalResponse = true
             }
@@ -685,14 +707,16 @@ export default function (Firebase: any): AnyObject {
               // if the remote document exists: apply to the local store
               if (snapshot.exists) {
                 processDocument(snapshot)
-                // the promise is still pending at this point only if the doc couldn't be loaded
-                // from cache (no persistence, or never previously loaded)
-                if (initialPromise.isPending) {
-                  streamingStart()
-                }
-                if (refreshedPromise.isPending) {
-                  refreshedPromise.resolve()
-                }
+                  .then(() => {
+                    // the promise is still pending at this point only if the doc couldn't be loaded
+                    // from cache (no persistence, or never previously loaded)
+                    if (initialPromise.isPending) {
+                      streamingStart()
+                    }
+                    if (refreshedPromise.isPending) {
+                      refreshedPromise.resolve()
+                    }
+                  })
               }
               // the document doesn't exist yet
               else {
@@ -734,12 +758,17 @@ export default function (Firebase: any): AnyObject {
             // 'collection' mode:
             else {
               processCollection(snapshot.docChanges())
-              if (initialPromise.isPending) {
-                streamingStart()
-              }
-              if (refreshedPromise.isPending) {
-                refreshedPromise.resolve()
-              }
+                // rejected if the insertion of some documents was aborted by the user callback
+                .catch(() => {})
+                // fullfill anyway
+                .then(() => {
+                  if (initialPromise.isPending) {
+                    streamingStart()
+                  }
+                  if (refreshedPromise.isPending) {
+                    refreshedPromise.resolve()
+                  }
+                })
             }
             gotFirstServerResponse = true
           }

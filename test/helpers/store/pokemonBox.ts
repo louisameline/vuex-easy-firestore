@@ -49,8 +49,12 @@ export default {
       return updateStore(doc)
     },
     patchHook: function (updateStore, doc, store) {
-      doc.addedBeforePatch = true
-      return updateStore(doc)
+      return new Promise((resolve, reject) => {
+        setTimeout(() => {
+          doc.addedBeforePatch = true
+          resolve(updateStore(doc))
+        }, 10)
+      })
     },
     deleteHook: function (updateStore, id, store) {
       if (id === 'stopBeforeDelete') return

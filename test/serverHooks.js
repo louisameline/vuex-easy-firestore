@@ -15,7 +15,7 @@ test('[MANUAL TEST] server prop deletion - no defaults', async t => {
   // ==============================================
   await wait(1)
   // make sure defaultPropsNotToBeDeleted is true also on the server
-  store.dispatch('serverHooks/set', {defaultPropsNotToBeDeleted: 'DELETE ME'})
+  await store.dispatch('serverHooks/set', {defaultPropsNotToBeDeleted: 'DELETE ME'})
   t.is(state.defaultPropsNotToBeDeleted, 'DELETE ME')
   await wait(3)
   docR = await docRef.get()
@@ -40,7 +40,7 @@ test('[MANUAL TEST] server prop deletion - top lvl', async t => {
   // non-default prop deletion is reflected locally
   // ==============================================
   // make sure defaultPropsNotToBeDeleted is true also on the server
-  store.dispatch('serverHooks/set', {addedPropToBeDeleted: 'DELETE ME'})
+  await store.dispatch('serverHooks/set', {addedPropToBeDeleted: 'DELETE ME'})
   t.is(state.addedPropToBeDeleted, 'DELETE ME')
   await wait(3)
   docR = await docRef.get()
@@ -66,7 +66,7 @@ test('[MANUAL TEST] server prop deletion - nested', async t => {
   // nested props deletion is reflected locally
   // ==============================================
   // make sure defaultPropsNotToBeDeleted is true also on the server
-  store.dispatch('serverHooks/set', {nestedD: {tobe: {deleted: 'DELETE ME', stay: true}}})
+  await store.dispatch('serverHooks/set', {nestedD: {tobe: {deleted: 'DELETE ME', stay: true}}})
   t.deepEqual(state.nestedD, {tobe: {deleted: 'DELETE ME', stay: true}})
   await wait(3)
   docR = await docRef.get()

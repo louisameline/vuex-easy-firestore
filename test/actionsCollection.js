@@ -57,7 +57,7 @@ test('[COLLECTION] insert and patch right after each other', async t => {
   t.is(box.pokemon[id].name, 'Mew')
   t.deepEqual(box.pokemon[id].type, {normal: true})
   // patch
-  store.dispatch('pokemonBox/patch', {id, type: {psychic: true}})
+  await store.dispatch('pokemonBox/patch', {id, type: {psychic: true}})
   t.is(box.pokemon[id].name, 'Mew')
   t.deepEqual(box.pokemon[id].type, {normal: true, psychic: true})
   // await server
@@ -77,11 +77,11 @@ test('[COLLECTION] edit twice right after each other', async t => {
   t.is(box.pokemon[id].name, 'Mew')
   await wait(3)
   // patch once
-  store.dispatch('pokemonBox/patch', {id, name: 'Mew!'})
+  await store.dispatch('pokemonBox/patch', {id, name: 'Mew!'})
   t.is(box.pokemon[id].name, 'Mew!')
   await wait(0.5)
   t.is(box.pokemon[id].name, 'Mew!')
-  store.dispatch('pokemonBox/patch', {id, name: 'Mew!!'})
+  await store.dispatch('pokemonBox/patch', {id, name: 'Mew!!'})
   t.is(box.pokemon[id].name, 'Mew!!')
   await wait(0.1)
   t.is(box.pokemon[id].name, 'Mew!!')
@@ -141,7 +141,7 @@ test('[COLLECTION] set & delete: top lvl', async t => {
     name: 'COOL Squirtle!',
     meta: {date: date2}
   }
-  store.dispatch('pokemonBox/set', pokemonValuesNew)
+  await store.dispatch('pokemonBox/set', pokemonValuesNew)
   t.truthy(box.pokemon[id])
   t.is(box.pokemon[id].name, 'COOL Squirtle!')
   t.deepEqual(box.pokemon[id].type, ['water'])
@@ -154,7 +154,7 @@ test('[COLLECTION] set & delete: top lvl', async t => {
   t.deepEqual(doc.type, ['water'])
 
   // update with {id: val}
-  store.dispatch('pokemonBox/set', {[id]: {name: 'very berry COOL Squirtle!'}})
+  await store.dispatch('pokemonBox/set', {[id]: {name: 'very berry COOL Squirtle!'}})
   t.is(box.pokemon[id].name, 'very berry COOL Squirtle!')
   await wait(3)
   docR = await boxRef.doc(id).get()
@@ -162,7 +162,7 @@ test('[COLLECTION] set & delete: top lvl', async t => {
   t.is(doc.name, 'very berry COOL Squirtle!')
 
   // add a new prop (deep)
-  store.dispatch('pokemonBox/set', {id, nested: {new: {deep: {prop: true}}}})
+  await store.dispatch('pokemonBox/set', {id, nested: {new: {deep: {prop: true}}}})
   t.deepEqual(box.pokemon[id].nested, {new: {deep: {prop: true}}})
   await wait(3)
   docR = await boxRef.doc(id).get()
@@ -170,7 +170,7 @@ test('[COLLECTION] set & delete: top lvl', async t => {
   t.deepEqual(doc.nested, {new: {deep: {prop: true}}})
 
   // update arrays
-  store.dispatch('pokemonBox/set', {type: ['water', 'normal'], id})
+  await store.dispatch('pokemonBox/set', {type: ['water', 'normal'], id})
   t.deepEqual(box.pokemon[id].type, ['water', 'normal'])
   await wait(3)
   docR = await boxRef.doc(id).get()
@@ -178,7 +178,7 @@ test('[COLLECTION] set & delete: top lvl', async t => {
   t.deepEqual(doc.type, ['water', 'normal'])
 
   // SECOND SET + set chooses insert appropriately
-  store.dispatch('pokemonBox/set', {name: 'Charmander', id: id2})
+  await store.dispatch('pokemonBox/set', {name: 'Charmander', id: id2})
   t.truthy(box.pokemon[id2])
   t.is(box.pokemon[id2].name, 'Charmander')
   await wait(3)

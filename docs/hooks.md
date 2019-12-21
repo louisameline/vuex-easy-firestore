@@ -29,8 +29,8 @@ Hooks must be defined inside your vuex module under `sync`. Below are the exampl
 
 The `doc` passed in the `insert` and `patch` hooks will also have an `id` field which is either the new id or the id of the doc to be patched.
 
-::: warning You must call `updateStore(doc)` to make the store mutation.
-But you may choose not to call this to abort the mutation. If you do not call `updateStore(doc)` nothing will happen.
+::: warning You must call `updateStore()`.
+Call `updateStore(doc)` to proceed with the store mutation, or `updateStore(false)` to abort the mutation.
 :::
 
 ## Hooks after local changes before sync
