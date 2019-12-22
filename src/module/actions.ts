@@ -476,32 +476,26 @@ export default function (Firebase: any): AnyObject {
       const searchTarget = (getters.collectionMode)
         ? getters.storeRef[doc.id]
         : getters.storeRef
-      const compareInfo = compareObjectProps(
-        flatten(doc), // presentIn 0
-        flatten(defaultValues), // presentIn 1
-        flatten(searchTarget) // presentIn 2
-      )
-      Object.keys(compareInfo.presentIn).forEach(prop => {
-        // don't worry about props not in fillables
-        if (getters.fillables.length && !getters.fillables.includes(prop)) {
-          return
+      const clearObject = function (toBeClearedObj, RefObj, path = []) {
+        for (let key in toBeClearedObj) {
+          const pathCopy = path.slice(0)
+          pathCopy.push(key)
+          const stringPath = pathCopy.join('.')
+          if (!RefObj.hasOwnProperty(key)) {
+            const excluded = ['_conf', '_sync']
+            if (!excluded.includes(key)
+              && (!getters.fillables.length || getters.fillables.includes(stringPath))
+              && !getters.guard.includes(stringPath)
+            ) {
+              commit('DELETE_PROP', (getters.collectionMode ? (doc.id + '.') : '') + stringPath)
+            }
+          }
+          else if (isPlainObject(toBeClearedObj[key])) {
+            clearObject(toBeClearedObj[key], RefObj[key], pathCopy);
+          }
         }
-        // don't worry about props in guard
-        if (getters.guard.includes(prop)) return
-        // don't worry about props starting with _sync or _conf
-        if (prop.split('.')[0] === '_sync' || prop.split('.')[0] === '_conf') return
-        // where is the prop present?
-        const presence = compareInfo.presentIn[prop]
-        const propNotInDoc = (!presence.includes(0))
-        const propNotInDefaultValues = (!presence.includes(1))
-        // delete props that are not present in the doc and default values
-        if (propNotInDoc && propNotInDefaultValues) {
-          const path = (getters.collectionMode)
-            ? `${doc.id}.${prop}`
-            : prop
-          return commit('DELETE_PROP', path)
-        }
-      })
+      }
+      clearObject(searchTarget, doc)
     },
     openDBChannel (
       {getters, state, commit, dispatch},
