@@ -94,7 +94,6 @@ export default function (Firebase: any): AnyObject {
         )
         const cleanDoc = setDefaultValues(doc, defaultValues)
         //cleanDoc.id = id
-        delete doc.updatedAt
         return cleanDoc
       },
     prepareForPatch: (state, getters, rootState, rootGetters) =>

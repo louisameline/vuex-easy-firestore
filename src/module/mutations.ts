@@ -83,6 +83,10 @@ export default function (userState: object): AnyObject {
         ref = ref[patches.id]
       }
       if (!ref) return logError('patch-no-ref')
+      if (patches.resMetadata) {
+        Object.assign(state.resMetadata, patches.resMetadata)
+        delete patches.resMetadata
+      }
       return Object.keys(patches).forEach(key => {
         let newVal = patches[key]
         // Merge if exists
