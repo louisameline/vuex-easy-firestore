@@ -499,7 +499,7 @@ export default function (Firebase: any): AnyObject {
     },
     openDBChannel (
       {getters, state, commit, dispatch},
-      parameters: any = {clauses: {}, pathVariables: {}}
+      parameters: any = {clauses: {}, pathVariables: {}, fetchedCallback: null}
     ) {
       if (!isPlainObject(parameters)) parameters = {}
       /* COMPATIBILITY START
@@ -518,12 +518,17 @@ export default function (Firebase: any): AnyObject {
             delete pathVariables[entry[0]]
           }
         })
-        parameters = {clauses: parameters, pathVariables}
+        parameters = {
+          clauses: parameters,
+          pathVariables,
+          fetchedCallback: parameters.fetchedCallback
+        }
       }
       /* COMPATIBILITY END */
       const defaultParameters = {
         clauses: {},
-        pathVariables: {}
+        pathVariables: {},
+        fetchedCallback: null
       }
       parameters = Object.assign(defaultParameters, parameters)
       dispatch('setUserId')
@@ -700,6 +705,7 @@ export default function (Firebase: any): AnyObject {
             if (!getters.collectionMode) {
               // if the remote document exists: apply to the local store
               if (snapshot.exists) {
+                if (parameters.fetchedCallback) parameters.fetchedCallback()
                 processDocument(snapshot)
                   .then(() => {
                     // the promise is still pending at this point only if the doc couldn't be loaded
@@ -727,6 +733,7 @@ export default function (Firebase: any): AnyObject {
                   }
                   try {
                     await dispatch('insertInitialDoc')
+                    if (parameters.fetchedCallback) parameters.fetchedCallback()
                     // if the initial document was successfully inserted
                     if (initialPromise.isPending) {
                       streamingStart()
@@ -751,6 +758,7 @@ export default function (Firebase: any): AnyObject {
             }
             // 'collection' mode:
             else {
+              if (parameters.fetchedCallback) parameters.fetchedCallback()
               processCollection(snapshot.docChanges())
                 // rejected if the insertion of some documents was aborted by the user callback
                 .catch(() => {})
