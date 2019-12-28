@@ -131,6 +131,7 @@ export function makeBatchFromSyncstack (
   // Add to batch
   inserts.forEach(item => {
     const newRef = dbRef.doc(item.id)
+    delete item.id
     batch.set(newRef, item)
   })
   // log the batch contents
