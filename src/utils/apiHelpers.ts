@@ -121,8 +121,13 @@ export function makeBatchFromSyncstack (
   count = count + deletions.length
   // Add to batch
   deletions.forEach(id => {
-    const docRef = dbRef.doc(id)
-    batch.delete(docRef)
+    if (id) {
+      const docRef = dbRef.doc(id)
+      batch.delete(docRef)
+    }
+    else {
+      const p = batch.delete(dbRef)
+    }
   })
   // Add 'inserts' to batch
   const inserts = grabUntilApiLimit('inserts', count, batchMaxCount, state)

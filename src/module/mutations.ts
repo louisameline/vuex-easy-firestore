@@ -104,11 +104,16 @@ export default function (userState: object): AnyObject {
       })
     },
     DELETE_DOC (state, id) {
-      if (state._conf.firestoreRefType.toLowerCase() !== 'collection') return
-      if (state._conf.statePropName) {
-        this._vm.$delete(state[state._conf.statePropName], id)
-      } else {
-        this._vm.$delete(state, id)
+      const s = state._conf.statePropName ? state[state._conf.statePropName] : state
+      if (state._conf.firestoreRefType.toLowerCase() !== 'collection') {
+        Object.keys(s).forEach(key => {
+          if (!(['_conf', '_sync']).includes(key)) {
+            this._vm.$delete(s, key)
+          }
+        })
+      }
+      else {
+        this._vm.$delete(s, id)
       }
     },
     DELETE_PROP (state, path) {

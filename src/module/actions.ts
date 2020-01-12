@@ -118,12 +118,12 @@ export default function (Firebase: any): AnyObject {
     ) {
       // 0. payload correction (only arrays)
       const ids = !isArray(payload) ? [payload] : payload
-
+      
       // 1. Prepare for patching
       // 2. Push to syncStack
       const deletions = state._sync.syncStack.deletions.concat(ids)
       state._sync.syncStack.deletions = deletions
-
+      
       if (!state._sync.syncStack.deletions.length) return
       // 3. Create or refresh debounce & pass id to resolve
       return dispatch('handleSyncStackDebounce', payload)
@@ -196,7 +196,8 @@ export default function (Firebase: any): AnyObject {
       return new Promise((resolve, reject) => {
         state._sync.syncStack.resolves.push(() => resolve(payloadToResolve))
         state._sync.syncStack.rejects.push(reject)
-        if (!getters.signedIn) return false
+        
+        //if (!getters.signedIn) return false
         if (!state._sync.syncStack.debounceTimer) {
           const ms = state._conf.sync.debounceTimerMs
           const debounceTimer = startDebounce(ms)
@@ -922,7 +923,7 @@ export default function (Firebase: any): AnyObject {
     delete ({state, getters, commit, dispatch}, id) {
       const store = this
       // check payload
-      if (!id) return
+      //if (!id) return
       // check userId
       dispatch('setUserId')
       // define the firestore update
@@ -935,7 +936,7 @@ export default function (Firebase: any): AnyObject {
       // define the store update
       function storeUpdateFn (_id) {
         // id is a path
-        const pathDelete = (_id.includes('.') || !getters.collectionMode)
+        const pathDelete = !getters.collectionMode && _id
         if (pathDelete) {
           const path = _id
           if (!path) return logError('delete-missing-path')
@@ -946,8 +947,14 @@ export default function (Firebase: any): AnyObject {
           }
           return firestoreUpdateFnPath(path)
         }
-        if (!_id) return logError('delete-missing-id')
-        commit('DELETE_DOC', _id)
+        if (getters.collectionMode && !_id) return logError('delete-missing-id')
+        if (_id) {
+          commit('DELETE_DOC', _id)
+        }
+        else {
+          commit('RESET_VUEX_EASY_FIRESTORE_STATE')
+          dispatch('setUserId')
+        }
         // check for a hook after local change before sync
         if (state._conf.sync.deleteHookBeforeSync) {
           return state._conf.sync.deleteHookBeforeSync(firestoreUpdateFnId, _id, store)
