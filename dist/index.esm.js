@@ -1018,16 +1018,18 @@ function pluginActions (Firebase) {
                         state._sync.syncStack.inserts.length +
                         state._sync.syncStack.propDeletions.length;
                     if (remainingSyncStack) {
-                        dispatch('batchSync');
+                        return dispatch('batchSync');
                     }
+                })
+                    .then(function () {
                     dispatch('_stopPatching');
-                    return resolve();
+                    resolve();
                 })
                     .catch(function (error$1) {
                     state._sync.patching = 'error';
                     state._sync.syncStack.debounceTimer = null;
                     error('sync-error', error$1);
-                    return reject(error$1);
+                    reject(error$1);
                 });
             });
         },
