@@ -74,7 +74,6 @@ const errorMessages = {
  */
 export default function (errorId: string, error?: any): string {
   const logData = errorMessages[errorId] || errorId
-  console.error(`[vuex-easy-firestore] Error! ${logData}`)
-  if (error) console.error(error)
+  console.error(`[vuex-easy-firestore] Error! ${logData}`, error)
   return errorId
 }

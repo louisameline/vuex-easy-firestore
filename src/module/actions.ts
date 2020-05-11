@@ -229,14 +229,19 @@ export default function (Firebase: any): AnyObject {
             state._sync.syncStack.deletions.length +
             state._sync.syncStack.inserts.length +
             state._sync.syncStack.propDeletions.length
-          if (remainingSyncStack) { dispatch('batchSync') }
+          if (remainingSyncStack) {
+            return dispatch('batchSync')
+          }
+        })
+        .then(() => {
           dispatch('_stopPatching')
-          return resolve()
-        }).catch(error => {
+          resolve()
+        })
+        .catch(error => {
           state._sync.patching = 'error'
           state._sync.syncStack.debounceTimer = null
           logError('sync-error', error)
-          return reject(error)
+          reject(error)
         })
       })
     },
