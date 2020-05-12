@@ -44,6 +44,7 @@
     "find-and-replace-anything": "^2.0.4",
     "flatten-anything": "^1.4.1",
     "is-what": "^3.4.0",
+    "lodash-es": "^4.17.15",
     "merge-anything": "^2.4.4",
     "vuex-easy-access": "^3.1.8"
   },

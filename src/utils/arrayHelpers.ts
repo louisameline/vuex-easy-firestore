@@ -1,6 +1,7 @@
 import { isAnyObject, isPlainObject, isArray } from 'is-what'
 import * as firebase from 'firebase/app'
 import 'firebase/firestore'
+import isEqual from 'lodash-es/isEqual'
 
 let Firebase = firebase
 
@@ -17,7 +18,14 @@ export class ArrayUnion {
   }
   executeOn (array: any[]) {
     this.payload.forEach(item => {
-      if (!array.includes(item)) {
+      // if array of object, find it by "id" (ex.: works with doc reference)
+      const index =
+        isAnyObject(item) && item.id !== undefined
+          // the user will have to use his own comparison function before calling
+          // ArrayUnion if this simple comparison is not enough
+          ? array.findIndex(_item => isEqual(_item, item))
+          : array.indexOf(item)
+      if (index === -1) {
         array.push(item)
       }
     })
