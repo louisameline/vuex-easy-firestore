@@ -113,8 +113,8 @@ export default function (Firebase: any): AnyObject {
             patchData = doc
           }
           // set default fields
-          patchData.updated_at = new Date()
-          patchData.updated_by = state._sync.userId
+          //patchData.updated_at = new Date()
+          //patchData.updated_by = state._sync.userId
           // clean up item
           const cleanedPatchData = filter(patchData, getters.fillables, getters.guard)
           const itemToUpdate = flatten(cleanedPatchData)
@@ -130,8 +130,8 @@ export default function (Firebase: any): AnyObject {
         const collectionMode = getters.collectionMode
         const patchData: AnyObject = {}
         // set default fields
-        patchData.updated_at = new Date()
-        patchData.updated_by = state._sync.userId
+        //patchData.updated_at = new Date()
+        //patchData.updated_by = state._sync.userId
         // add fillable and guard defaults
         // clean up item
         const cleanedPatchData = filter(patchData, getters.fillables, getters.guard)
@@ -168,6 +168,10 @@ export default function (Firebase: any): AnyObject {
         //doc.created_at = new Date()
         //doc.created_by = state._sync.userId
         //doc.id = getters.docModeId
+        if (!doc.resMetadata) {
+          doc.resMetadata = {}
+        }
+        doc.resMetadata.updatedAt = Firebase.firestore.FieldValue.serverTimestamp()
         // clean up item
         doc = filter(doc, getters.fillables, getters.guard)
         return doc
