@@ -15,7 +15,7 @@ export type IPluginGetters = {
   storeRef: (state: any, getters?: any, rootState?: any, rootGetters?: any) => AnyObject
   collectionMode: (state: any, getters?: any, rootState?: any, rootGetters?: any) => boolean
   prepareForPatch: (state: any, getters?: any, rootState?: any, rootGetters?: any) => (ids: string[], doc: AnyObject) => AnyObject
-  prepareForInsert: (state: any, getters?: any, rootState?: any, rootGetters?: any) => (items: any[]) => any[]
+  prepareForInsert: (state: any, getters?: any, rootState?: any, rootGetters?: any) => (items: any) => any
   prepareInitialDocForInsert: (state: any, getters?: any, rootState?: any, rootGetters?: any) => (doc: AnyObject) => AnyObject
 }
 
@@ -113,7 +113,16 @@ export default function (Firebase: any): AnyObject {
             patchData = doc
           }
           // set default fields
-          //patchData.updated_at = new Date()
+          if (state._conf.metadata) {
+            if (!patchData._metadata) {
+              patchData._metadata = {}
+            }
+            // we'll have different possible values for updated at, to know if the
+            // server timestamp should be retrieved afterwards
+            if (state._conf.metadata.updatedAt) {
+              patchData._metadata.updatedAt = Firebase.firestore.FieldValue.serverTimestamp()
+            }
+          }
           //patchData.updated_by = state._sync.userId
           // clean up item
           const cleanedPatchData = filter(patchData, getters.fillables, getters.guard)
@@ -130,7 +139,16 @@ export default function (Firebase: any): AnyObject {
         const collectionMode = getters.collectionMode
         const patchData: AnyObject = {}
         // set default fields
-        //patchData.updated_at = new Date()
+        if (state._conf.metadata) {
+          if (!patchData._metadata) {
+            patchData._metadata = {}
+          }
+          // we'll have different possible values for updated at, to know if the
+          // server timestamp should be retrieved afterwards
+          if (state._conf.metadata.updatedAt) {
+            patchData._metadata.updatedAt = Firebase.firestore.FieldValue.serverTimestamp()
+          }
+        }
         //patchData.updated_by = state._sync.userId
         // add fillable and guard defaults
         // clean up item
@@ -149,17 +167,33 @@ export default function (Firebase: any): AnyObject {
         return {[id]: cleanedPatchData}
       },
     prepareForInsert: (state, getters, rootState, rootGetters) =>
-      (items = []) => {
+      (item) => {
         // add fillable and guard defaults
-        return items.reduce((carry, item) => {
-          // set default fields
-          //item.created_at = new Date()
-          //item.created_by = state._sync.userId
-          // clean up item
-          item = filter(item, getters.fillables, getters.guard)
-          carry.push(item)
-          return carry
-        }, [])
+        // set default fields
+        //item.created_at = new Date()
+        //item.created_by = state._sync.userId
+        // clean up item
+        const conf = getters.collectionMode
+            ? state[item.id]._conf
+            : state._conf
+
+        if (conf.metadata) {
+          if (!item.doc._metadata) {
+            item.doc._metadata = {}
+          }
+          if (conf.metadata.updatedAt) {
+            item.doc._metadata.updatedAt = Firebase.firestore.FieldValue.serverTimestamp()
+          }
+          if (conf.metadata.createdBy) {
+            item.doc._metadata.createdBy = state._sync.userId || null
+          }
+          if (conf.metadata.createdAt) {
+            item.doc._metadata.createdAt = Firebase.firestore.FieldValue.serverTimestamp()
+          }
+        }
+
+        item.doc = filter(item.doc, getters.fillables, getters.guard)
+        return item
       },
     prepareInitialDocForInsert: (state, getters, rootState, rootGetters) =>
       (doc) => {
@@ -168,10 +202,22 @@ export default function (Firebase: any): AnyObject {
         //doc.created_at = new Date()
         //doc.created_by = state._sync.userId
         //doc.id = getters.docModeId
-        if (!doc.resMetadata) {
-          doc.resMetadata = {}
+        if (state._conf.metadata) {
+          if (!doc._metadata) {
+            doc._metadata = {}
+          }
+          // we'll have different possible values for updatedAt, to know if the
+          // server timestamp should be retrieved afterwards
+          if (state._conf.metadata.updatedAt) {
+            doc._metadata.updatedAt = Firebase.firestore.FieldValue.serverTimestamp()
+          }
+          if (state._conf.metadata.createdBy) {
+            doc._metadata.createdBy = state._sync.userId || null
+          }
+          if (state._conf.metadata.createdAt) {
+            doc._metadata.createdAt = Firebase.firestore.FieldValue.serverTimestamp()
+          }
         }
-        doc.resMetadata.updatedAt = Firebase.firestore.FieldValue.serverTimestamp()
         // clean up item
         doc = filter(doc, getters.fillables, getters.guard)
         return doc
@@ -203,5 +249,22 @@ export default function (Firebase: any): AnyObject {
         })
       })
     },
+    syncIsEnabled: (state, getters, rootState, rootGetters) => {
+      return state._conf.syncActivation === true
+        // TODO: this should not read from my custom config module, it should be stored
+        // properly by the lib
+        || (state._conf.syncActivation === 'global' && rootState.local.data.syncGloballyEnabled === true)
+        // the local activation should be stored outside the store
+        || (state._conf.syncActivation === 'local' && state._local.syncEnabled === true)
+    },
+    submoduleIds (state) {
+      const ids = []
+      Object.keys(state).forEach(key => {
+        if (!['_conf', '_local', '_metadata', '_sync', state._conf.statePropName].includes(key)) {
+          ids.push(key)
+        }
+      })
+      return ids
+    }
   }
 }

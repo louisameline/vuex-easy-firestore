@@ -3,6 +3,7 @@ import copy from 'copy-anything'
 import merge from 'merge-anything'
 import flatten from 'flatten-anything'
 import { compareObjectProps } from 'compare-anything'
+import iniModule from './index'
 import { AnyObject, IPluginState } from '../declarations'
 import setDefaultValues from '../utils/setDefaultValues'
 import startDebounce from '../utils/debounceHelper'
@@ -71,9 +72,9 @@ export default function (Firebase: any): AnyObject {
         if (indexIdInInsert === -1) return
         // the doc trying to be synced is also in insert
         // prepare the doc as new doc:
-        const patchDoc = getters.prepareForInsert([doc])[0]
+        const patchDoc = getters.prepareForInsert({ id: newDoc.id, doc: newDoc.doc })
         // replace insert sync stack with merged item:
-        state._sync.syncStack.inserts[newDocIndex] = merge(newDoc, patchDoc)
+        state._sync.syncStack.inserts[newDocIndex].doc = merge(newDoc.doc, patchDoc.doc)
         // empty out the id that was to be patched:
         ids.splice(indexIdInInsert, 1)
       })
@@ -150,21 +151,32 @@ export default function (Firebase: any): AnyObject {
       {state, getters, commit, dispatch},
       payload: (AnyObject | AnyObject[]) = []
     ) {
-      // 0. payload correction (only arrays)
-      const docs = !isArray(payload) ? [payload] : payload
+      return new Promise((resolve, reject) => {
+          // check for a hook after local change before sync
+          if (state._conf.sync.insertHookBeforeSync) {
+            // @ts-ignore
+            state._conf.sync.insertHookBeforeSync(resolve, payload.doc, this)
+          }
+          else {
+            resolve()
+          }
+        })
+        .then(() => {
+          // 1. Prepare for patching
+          // @ts-ignore
+          const prepared = getters.prepareForInsert(payload)
 
-      // 1. Prepare for patching
-      const syncStack = getters.prepareForInsert(docs)
+          // 2. Push to syncStack
+          // @ts-ignore
+          state._sync.syncStack.inserts = state._sync.syncStack.inserts.concat([{ id: payload.id, doc: prepared.doc }])
 
-      // 2. Push to syncStack
-      const inserts = state._sync.syncStack.inserts.concat(syncStack)
-      state._sync.syncStack.inserts = inserts
-
-      // 3. Create or refresh debounce & pass id to resolve
-      const payloadToResolve = isArray(payload)
-        ? payload.map(doc => doc.id)
-        : payload.id
-      return dispatch('handleSyncStackDebounce', payloadToResolve)
+          // 3. Create or refresh debounce & pass id to resolve
+          const payloadToResolve = isArray(payload)
+            ? payload.map(doc => doc.id)
+            : payload.id
+          
+          return dispatch('handleSyncStackDebounce', payloadToResolve)
+        })
     },
     insertInitialDoc ({state, getters, commit, dispatch}) {
       // 0. only docMode
@@ -441,8 +453,30 @@ export default function (Firebase: any): AnyObject {
         return logError(e)
       }
     },
+    addSubmodule ({getters, state, commit, dispatch}, params) {
+      const defaultParams = {
+        id: null,
+        state: null
+      }
+      params = Object.assign(defaultParams, params || {})
+      if (!params.id) {
+        params.id = getters.dbRef.doc().id
+      }
+      if (params.state) {
+        // the fact that we pass the data as part of the config module is not good, in
+        // case we need to reset the state it won't have default values
+        state._conf.submodule.state = merge(state._conf.submodule.state, params.state)
+      }
+      // TODO: this works for first level collections only, should be improved
+      const modulePath = [state._conf.moduleName, params.id]
+      // TODO: make sure everything is alright like at store init, this was a little simplified.
+      this.registerModule(modulePath, iniModule(state._conf.submodule, Firebase), { preserveState: params.state === null })
+      // TODO: this should probably always be done by default by the lib
+      dispatch(modulePath.join('/') + '/setPathVars', { moduleId: params.id }, { root: true })
+      return modulePath
+    },
     applyHooksAndUpdateState ( // this is only on server retrievals
-      {getters, state, commit, dispatch},
+      {getters, state, commit, dispatch, rootCommit},
       {change, id, doc = {}}: {change: 'added' | 'removed' | 'modified', id: string, doc: AnyObject}
     ) {
       return new Promise((resolve, reject) => {
@@ -450,16 +484,59 @@ export default function (Firebase: any): AnyObject {
         // define storeUpdateFn()
         function storeUpdateFn (_doc) {
           if (_doc) {
+
+            let metadata = null
+            if (doc._metadata) {
+              metadata = doc._metadata
+              delete doc._metadata
+            }
+
+            const edit = () => {
+              // TODO: if we are in a collection, this action had better be dispatched to
+              // the document module
+              dispatch('deleteMissingProps', _doc)
+              let _state
+              if (getters.collectionMode) {
+                _state = state[id]
+                // forward to the doc module
+                // TODO: this should not assume that we are in a root collection
+                rootCommit(state._conf.moduleName + '/' +  id + '/PATCH_DOC', _doc)
+              }
+              else {
+                _state = state
+                commit('PATCH_DOC', _doc)
+              }
+              // TODO: we'd need to know when properties got deleted from the server, so
+              // the metadata values would need to be split between local and remote. Maybe
+              // we can prefix local ones with an underscore
+              if (metadata) {
+                Object.assign(_state._metadata, metadata)
+              }
+            }
+
             switch (change) {
+              // relevant for collections only
               case 'added':
-                commit('INSERT_DOC', _doc)
+                // commit('INSERT_DOC', _doc)
+                if (store.hasModule([state._conf.moduleName, id])) {
+                  // transfer to the existing submodule
+                  edit()
+                }
+                else {
+                  // create the submodule
+                  dispatch('addSubmodule', {
+                    id,
+                    state: { data: _doc, _metadata: metadata }
+                  })
+                }
                 break
+              // relevant for collections only
               case 'removed':
+                // TODO: make this work with the submodule system
                 commit('DELETE_DOC', id)
                 break
               default:
-                dispatch('deleteMissingProps', _doc)
-                commit('PATCH_DOC', _doc)
+                edit()
                 break
             }
             resolve()
@@ -469,7 +546,10 @@ export default function (Firebase: any): AnyObject {
           }
         }
         // get user set sync hook function
-        const syncHookFn = state._conf.serverChange[change + 'Hook']
+        // TODO: the hook should be called on the child directly. This wouldn't work
+        // if there were several possible module classes for a same collection
+        const conf = getters.collectionMode ? state._conf.submodule : state._conf,
+          syncHookFn = conf.serverChange[change + 'Hook']
         if (isFunction(syncHookFn)) {
           syncHookFn(storeUpdateFn, doc, id, store, 'server', change)
         } else {
@@ -477,10 +557,12 @@ export default function (Firebase: any): AnyObject {
         }
       })
     },
-    deleteMissingProps ({getters, commit}, doc) {
+    deleteMissingProps ({state, getters, commit}, doc) {
       const defaultValues = getters.defaultValues
       const searchTarget = (getters.collectionMode)
-        ? getters.storeRef[doc.id]
+        // TODO: this assumes that the collection and the doc have the same statePropName.
+        // Should probably be made the same for everything
+        ? (state._conf.statePropName ? getters.storeRef[doc.id][state._conf.statePropName] : getters.storeRef[doc.id])
         : getters.storeRef
       const clearObject = function (toBeClearedObj, RefObj, path = []) {
         for (let key in toBeClearedObj) {
@@ -828,18 +910,10 @@ export default function (Firebase: any): AnyObject {
       if (!newDoc.id) newDoc.id = getters.dbRef.doc().id
       // apply default values
       const newDocWithDefaults = setDefaultValues(newDoc, state._conf.sync.defaultValues)
-      // define the firestore update
-      function firestoreUpdateFn (_doc) {
-        return dispatch('insertDoc', _doc)
-      }
       // define the store update
       function storeUpdateFn (_doc) {
         commit('INSERT_DOC', _doc)
-        // check for a hook after local change before sync
-        if (state._conf.sync.insertHookBeforeSync) {
-          return state._conf.sync.insertHookBeforeSync(firestoreUpdateFn, _doc, store)
-        }
-        return firestoreUpdateFn(_doc)
+        _doc => dispatch('insertDoc', { id: newDoc.id, doc: _doc })
       }
       // check for a hook before local change
       if (state._conf.sync.insertHook) {

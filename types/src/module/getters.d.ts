@@ -6,7 +6,7 @@ export declare type IPluginGetters = {
     storeRef: (state: any, getters?: any, rootState?: any, rootGetters?: any) => AnyObject;
     collectionMode: (state: any, getters?: any, rootState?: any, rootGetters?: any) => boolean;
     prepareForPatch: (state: any, getters?: any, rootState?: any, rootGetters?: any) => (ids: string[], doc: AnyObject) => AnyObject;
-    prepareForInsert: (state: any, getters?: any, rootState?: any, rootGetters?: any) => (items: any[]) => any[];
+    prepareForInsert: (state: any, getters?: any, rootState?: any, rootGetters?: any) => (items: any) => any;
     prepareInitialDocForInsert: (state: any, getters?: any, rootState?: any, rootGetters?: any) => (doc: AnyObject) => AnyObject;
 };
 /**
