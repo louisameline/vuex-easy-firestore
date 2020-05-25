@@ -21,8 +21,6 @@ import logError from './errors'
  * @returns {AnyObject} the actions object
  */
 export default function (Firebase: any): AnyObject {
-  // this is outside of openDBChannel to work across several channels
-  let previousSnapshotData = {}
   return {
     setUserId: ({commit, getters}, userId) => {
       if (userId === undefined) userId = null
@@ -476,7 +474,7 @@ export default function (Firebase: any): AnyObject {
       return modulePath
     },
     applyHooksAndUpdateState ( // this is only on server retrievals
-      {getters, state, commit, dispatch, rootCommit},
+      {getters, state, commit, dispatch},
       {change, id, doc = {}}: {change: 'added' | 'removed' | 'modified', id: string, doc: AnyObject}
     ) {
       return new Promise((resolve, reject) => {
@@ -500,7 +498,7 @@ export default function (Firebase: any): AnyObject {
                 _state = state[id]
                 // forward to the doc module
                 // TODO: this should not assume that we are in a root collection
-                rootCommit(state._conf.moduleName + '/' +  id + '/PATCH_DOC', _doc)
+                commit(state._conf.moduleName + '/' +  id + '/PATCH_DOC', _doc, { root: true })
               }
               else {
                 _state = state
@@ -549,7 +547,7 @@ export default function (Firebase: any): AnyObject {
         // TODO: the hook should be called on the child directly. This wouldn't work
         // if there were several possible module classes for a same collection
         const conf = getters.collectionMode ? state._conf.submodule : state._conf,
-          syncHookFn = conf.serverChange[change + 'Hook']
+          syncHookFn = conf.serverChange ? conf.serverChange[change + 'Hook'] : null
         if (isFunction(syncHookFn)) {
           syncHookFn(storeUpdateFn, doc, id, store, 'server', change)
         } else {
@@ -707,27 +705,11 @@ export default function (Firebase: any): AnyObject {
         state._sync.streaming[identifier] = null
       }
       const processDocument = (documentSnapshot, changeType = 'modified') => {
-        const data = documentSnapshot.data()
-        const dataJSON = JSON.stringify(data)
-        const previousDataJSON = previousSnapshotData[documentSnapshot.id]
-        let response = Promise.resolve()
-        // this condition lets us ignore the irrelevant "metadata-only changes" events
-        // that we get since `includeMetadataChanges` is `true` and that are meaningless
-        // for our local store. As a nice side effect, it will also ignore most "data
-        // changes" which actually didn't alter the data, including across several
-        // channels. Some rare false positives may still happen as this isn't a deep
-        // equal, but at least it's fast.
-        // We check if the initial promise is pending as the channel could be opened
-        // as we already have the data in memory, in which case we need to make sure
-        // the state is populated and the hook callback called.
-        // Note: `snapshot.isEqual` can't be used: it's useless as a different
-        // `fromCache` value makes it return false
-        if (initialPromise.isPending || !previousDataJSON || previousDataJSON !== dataJSON) {
-          const doc = getters.cleanUpRetrievedDoc(data, documentSnapshot.id)
-          response = dispatch('applyHooksAndUpdateState', {change: changeType, id: documentSnapshot.id, doc})
-          previousSnapshotData[documentSnapshot.id] = dataJSON
-        }
-        return response
+        return dispatch('applyHooksAndUpdateState', {
+          change: changeType,
+          id: documentSnapshot.id,
+          doc: getters.cleanUpRetrievedDoc(documentSnapshot.data(), documentSnapshot.id)
+        })
       }
       const processCollection = docChanges => {
         const promises = []
@@ -746,20 +728,16 @@ export default function (Firebase: any): AnyObject {
         {includeMetadataChanges: true},
         // this is either a documentSnapshot or a querySnapshot
         async snapshot => {
-          // if the data comes from cache. Note: the first call **always** has it `true`
+          // if the data comes from cache (requires enabled persistence)
           if (snapshot.metadata.fromCache) {
             // if it's the very first call, we are at the initial app load. If so, we'll use
-            // the data in cache (if available) to populate the state
+            // the data in cache (if available) to populate the state. Otherwise we can ignore.
+            // TODO: this is actually not useful when the store is persisted with Vuex-persist
             if (!gotFirstLocalResponse) {
               // 'doc' mode:
               if (!getters.collectionMode) {
-                // we don't want to resolve the initial promise without data.
-                // note: there is no data if it was never loaded or if there is no persistence
-                // on the device, so at this point we don't want to insert an initial document
-                if (snapshot.exists) {
-                  processDocument(snapshot)
-                    .then(streamingStart)
-                }
+                processDocument(snapshot)
+                  .then(streamingStart)
               }
               // 'collection' mode
               else {
@@ -771,21 +749,6 @@ export default function (Firebase: any): AnyObject {
               }
               gotFirstLocalResponse = true
             }
-            // not the first local call we get: this is the result of a local modification
-            // which doesn't require to do anything more to the state, we just need to
-            // store the snapshot for comparison when we get the server response
-            else {
-              // 'doc' mode:
-              if (!getters.collectionMode) {
-                previousSnapshotData[snapshot.id] = JSON.stringify(snapshot.data())
-              }
-              // 'collection' mode
-              else {
-                snapshot.docChanges().forEach(change => {
-                  previousSnapshotData[change.doc.id] = JSON.stringify(change.doc.data())
-                })
-              }
-            }
           }
           // if the data comes from the server
           else {
@@ -793,7 +756,9 @@ export default function (Firebase: any): AnyObject {
             if (!getters.collectionMode) {
               // if the remote document exists: apply to the local store
               if (snapshot.exists) {
-                if (parameters.fetchedCallback) parameters.fetchedCallback()
+                if (parameters.fetchedCallback) {
+                  parameters.fetchedCallback()
+                }
                 processDocument(snapshot)
                   .then(() => {
                     // the promise is still pending at this point only if the doc couldn't be loaded
@@ -821,7 +786,9 @@ export default function (Firebase: any): AnyObject {
                   }
                   try {
                     await dispatch('insertInitialDoc')
-                    if (parameters.fetchedCallback) parameters.fetchedCallback()
+                    if (parameters.fetchedCallback) {
+                      parameters.fetchedCallback()
+                    }
                     // if the initial document was successfully inserted
                     if (initialPromise.isPending) {
                       streamingStart()
@@ -860,6 +827,9 @@ export default function (Firebase: any): AnyObject {
                   }
                 })
             }
+            // this will already have been set to true if we had the data in cache
+            gotFirstLocalResponse = true
+            // this will already have been set to true if it's not the first server response
             gotFirstServerResponse = true
           }
         },
