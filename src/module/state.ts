@@ -2,6 +2,7 @@ import { AnyObject } from '../declarations'
 
 export type IState = {
   _sync: {
+    id: string
     signedIn: boolean
     userId: any
     streaming: AnyObject
@@ -31,6 +32,7 @@ export type IState = {
 export default function (): IState {
   return {
     _sync: {
+      id: null,
       signedIn: false,
       userId: null,
       streaming: {},

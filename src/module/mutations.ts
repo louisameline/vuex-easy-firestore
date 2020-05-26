@@ -113,7 +113,8 @@ export default function (userState: object): AnyObject {
         })
       }
       else {
-        this._vm.$delete(s, id)
+        this.unregisterModule([state._conf.moduleName, id])
+        // this._vm.$delete(s, id)
       }
     },
     DELETE_PROP (state, path) {
@@ -127,6 +128,9 @@ export default function (userState: object): AnyObject {
       }
       const ref = getDeepRef(searchTarget, propArr.join('.'))
       return this._vm.$delete(ref, target)
+    },
+    UNREGISTER_SUBMODULE (state, id) {
+      this.unregisterModule([state._conf.moduleName, id])
     }
   }
 }

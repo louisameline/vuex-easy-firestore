@@ -1,6 +1,7 @@
 import { AnyObject } from '../declarations';
 export declare type IState = {
     _sync: {
+        id: string;
         signedIn: boolean;
         userId: any;
         streaming: AnyObject;

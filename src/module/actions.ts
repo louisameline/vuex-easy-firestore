@@ -113,19 +113,15 @@ export default function (Firebase: any): AnyObject {
     },
     deleteDoc (
       {state, getters, commit, dispatch},
-      payload = []
+      id
     ) {
-      // 0. payload correction (only arrays)
-      const ids = !isArray(payload) ? [payload] : payload
-      
+      id = id || state._sync.id
       // 1. Prepare for patching
       // 2. Push to syncStack
-      const deletions = state._sync.syncStack.deletions.concat(ids)
-      state._sync.syncStack.deletions = deletions
+      state._sync.syncStack.deletions.push(id)
       
-      if (!state._sync.syncStack.deletions.length) return
       // 3. Create or refresh debounce & pass id to resolve
-      return dispatch('handleSyncStackDebounce', payload)
+      return dispatch('handleSyncStackDebounce', id)
     },
     deleteProp (
       {state, getters, commit, dispatch},
@@ -451,27 +447,52 @@ export default function (Firebase: any): AnyObject {
         return logError(e)
       }
     },
-    addSubmodule ({getters, state, commit, dispatch}, params) {
+    addLocalSubmodule ({getters, state, commit, dispatch}, params) {
       const defaultParams = {
         id: null,
         state: null
       }
       params = Object.assign(defaultParams, params || {})
+
+      // we make a copy so that each submodule has a distinct config object
+      const submoduleConfig = merge({}, state._conf.submodule)
+
       if (!params.id) {
         params.id = getters.dbRef.doc().id
       }
+      // if the user already provides data to put into the state
       if (params.state) {
+        if (typeof submoduleConfig.state === 'function') {
+          submoduleConfig.state = submoduleConfig.state()
+        }
+        else {
+          // TODO: clean this up
+          console.log('The `state` property should be a function, this is probably a mistake')
+        }
         // the fact that we pass the data as part of the config module is not good, in
         // case we need to reset the state it won't have default values
-        state._conf.submodule.state = merge(state._conf.submodule.state, params.state)
+        submoduleConfig.state = merge(submoduleConfig.state, params.state)
       }
       // TODO: this works for first level collections only, should be improved
       const modulePath = [state._conf.moduleName, params.id]
       // TODO: make sure everything is alright like at store init, this was a little simplified.
-      this.registerModule(modulePath, iniModule(state._conf.submodule, Firebase), { preserveState: params.state === null })
+      this.registerModule(modulePath, iniModule(submoduleConfig, Firebase), { preserveState: params.state === null })
+      state[params.id]._sync.id = params.id
       // TODO: this should probably always be done by default by the lib
       dispatch(modulePath.join('/') + '/setPathVars', { moduleId: params.id }, { root: true })
       return modulePath
+    },
+    // this assumes the module is already created locally, we might want to change that
+    addRemoteSubmodule ({getters, state, commit, dispatch}, id) {
+      return dispatch('insertDoc', {
+        id,
+        doc: state[id].data
+      })
+    },
+    unregisterSubmodules ({getters, state, commit, dispatch}) {
+      getters.submoduleIds.forEach(id => {
+        commit('UNREGISTER_SUBMODULE', id)
+      })
     },
     applyHooksAndUpdateState ( // this is only on server retrievals
       {getters, state, commit, dispatch},
@@ -516,13 +537,15 @@ export default function (Firebase: any): AnyObject {
               // relevant for collections only
               case 'added':
                 // commit('INSERT_DOC', _doc)
+                // if the module already exists (happens when we recreated it from local storage
+                // but Firestore doesn't know about it)
                 if (store.hasModule([state._conf.moduleName, id])) {
                   // transfer to the existing submodule
                   edit()
                 }
                 else {
                   // create the submodule
-                  dispatch('addSubmodule', {
+                  dispatch('addLocalSubmodule', {
                     id,
                     state: { data: _doc, _metadata: metadata }
                   })
@@ -530,7 +553,6 @@ export default function (Firebase: any): AnyObject {
                 break
               // relevant for collections only
               case 'removed':
-                // TODO: make this work with the submodule system
                 commit('DELETE_DOC', id)
                 break
               default:
@@ -984,31 +1006,43 @@ export default function (Firebase: any): AnyObject {
       }
       // define the store update
       function storeUpdateFn (_id) {
-        // id is a path
-        const pathDelete = !getters.collectionMode && _id
-        if (pathDelete) {
-          const path = _id
-          if (!path) return logError('delete-missing-path')
-          commit('DELETE_PROP', path)
-          // check for a hook after local change before sync
-          if (state._conf.sync.deleteHookBeforeSync) {
-            return state._conf.sync.deleteHookBeforeSync(firestoreUpdateFnPath, path, store)
+        // doc mode
+        if (!getters.collectionMode) {
+          // id is a path to delete on the document
+          if (_id) {
+            const path = _id
+            commit('DELETE_PROP', path)
+            // check for a hook after local change before sync
+            if (state._conf.sync.deleteHookBeforeSync) {
+              return state._conf.sync.deleteHookBeforeSync(firestoreUpdateFnPath, path, store)
+            }
+            return firestoreUpdateFnPath(path)
           }
-          return firestoreUpdateFnPath(path)
+          else {
+            // empty the data
+            commit('DELETE_DOC')
+            // restore the default empty state back
+            commit('RESET_VUEX_EASY_FIRESTORE_STATE')
+            dispatch('setUserId')
+            if (state._conf.sync.deleteHookBeforeSync) {
+              return state._conf.sync.deleteHookBeforeSync(firestoreUpdateFnId, null, store)
+            }
+            return firestoreUpdateFnPath(null)
+          }
         }
-        if (getters.collectionMode && !_id) return logError('delete-missing-id')
-        if (_id) {
-          commit('DELETE_DOC', _id)
-        }
+        // collection mode
         else {
-          commit('RESET_VUEX_EASY_FIRESTORE_STATE')
-          dispatch('setUserId')
+          if (_id) {
+            commit('DELETE_DOC', _id)
+            if (state._conf.sync.deleteHookBeforeSync) {
+              return state._conf.sync.deleteHookBeforeSync(firestoreUpdateFnId, _id, store)
+            }
+            return firestoreUpdateFnPath(_id)
+          }
+          else {
+            return logError('delete-missing-id')
+          }
         }
-        // check for a hook after local change before sync
-        if (state._conf.sync.deleteHookBeforeSync) {
-          return state._conf.sync.deleteHookBeforeSync(firestoreUpdateFnId, _id, store)
-        }
-        return firestoreUpdateFnId(_id)
       }
       // check for a hook before local change
       if (state._conf.sync.deleteHook) {

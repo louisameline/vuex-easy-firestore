@@ -113,6 +113,10 @@ export default function (Firebase: any): AnyObject {
             patchData = doc
           }
           // set default fields
+          if (state._metadata) {
+            // TODO: we don't want to synchronize every property in _metadata
+            patchData._metadata = merge({}, state._metadata)
+          }
           if (state._conf.metadata) {
             if (!patchData._metadata) {
               patchData._metadata = {}
@@ -140,13 +144,10 @@ export default function (Firebase: any): AnyObject {
         const patchData: AnyObject = {}
         // set default fields
         if (state._conf.metadata) {
-          if (!patchData._metadata) {
-            patchData._metadata = {}
-          }
-          // we'll have different possible values for updated at, to know if the
+          // todo: have different possible values for updated at, to know if the
           // server timestamp should be retrieved afterwards
           if (state._conf.metadata.updatedAt) {
-            patchData._metadata.updatedAt = Firebase.firestore.FieldValue.serverTimestamp()
+            patchData['_metadata.updatedAt'] = Firebase.firestore.FieldValue.serverTimestamp()
           }
         }
         //patchData.updated_by = state._sync.userId
@@ -163,7 +164,7 @@ export default function (Firebase: any): AnyObject {
           cleanedPath = path
         }
         cleanedPatchData[cleanedPath] = Firebase.firestore.FieldValue.delete()
-        cleanedPatchData.id = id
+        //cleanedPatchData.id = id
         return {[id]: cleanedPatchData}
       },
     prepareForInsert: (state, getters, rootState, rootGetters) =>

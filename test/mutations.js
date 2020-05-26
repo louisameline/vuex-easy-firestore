@@ -17,6 +17,7 @@ test('RESET_VUEX_EASY_FIRESTORE_STATE', t => {
 
   // test('RESET_VUEX_EASY_FIRESTORE_STATE', t => {
   const defaultState = {
+    id: null,
     signedIn: false,
     userId: null,
     streaming: {},
