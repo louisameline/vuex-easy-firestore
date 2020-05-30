@@ -511,20 +511,22 @@ export default function (Firebase: any): AnyObject {
             }
 
             const edit = () => {
-              // TODO: if we are in a collection, this action had better be dispatched to
-              // the document module
-              dispatch('deleteMissingProps', _doc)
+
               let _state
+
               if (getters.collectionMode) {
-                _state = state[id]
                 // forward to the doc module
                 // TODO: this should not assume that we are in a root collection
+                dispatch(state._conf.moduleName + '/' + id + '/deleteMissingProps', _doc, { root: true })
+                _state = state[id]
                 commit(state._conf.moduleName + '/' +  id + '/PATCH_DOC', _doc, { root: true })
               }
               else {
+                dispatch('deleteMissingProps', _doc)
                 _state = state
                 commit('PATCH_DOC', _doc)
               }
+
               // TODO: we'd need to know when properties got deleted from the server, so
               // the metadata values would need to be split between local and remote. Maybe
               // we can prefix local ones with an underscore
@@ -579,11 +581,7 @@ export default function (Firebase: any): AnyObject {
     },
     deleteMissingProps ({state, getters, commit}, doc) {
       const defaultValues = getters.defaultValues
-      const searchTarget = (getters.collectionMode)
-        // TODO: this assumes that the collection and the doc have the same statePropName.
-        // Should probably be made the same for everything
-        ? (state._conf.statePropName ? getters.storeRef[doc.id][state._conf.statePropName] : getters.storeRef[doc.id])
-        : getters.storeRef
+      const searchTarget =  state._conf.statePropName ? state[state._conf.statePropName] : state
       const clearObject = function (toBeClearedObj, RefObj, path = []) {
         for (let key in toBeClearedObj) {
           const pathCopy = path.slice(0)
