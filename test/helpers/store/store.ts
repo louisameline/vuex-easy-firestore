@@ -47,7 +47,7 @@ const easyFirestores = createFirestores(
     multipleOpenDBChannels,
     docModeWithPathVar
   ],
-  {logging: false, FirebaseDependency: Firebase}
+  {logging: false, FirebaseDependency: Firebase, appVersion: '0'},
 )
 
 export default {

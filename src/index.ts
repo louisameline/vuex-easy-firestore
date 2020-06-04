@@ -22,15 +22,18 @@ function vuexEasyFirestore (
   {
     logging = false,
     preventInitialDocInsertion = false,
-    FirebaseDependency = Firebase
+    FirebaseDependency = Firebase,
+    appVersion = null
   }: {
     logging?: boolean,
     preventInitialDocInsertion?: boolean,
-    FirebaseDependency?: any
+    FirebaseDependency?: any,
+    appVersion?: any
   } = {
     logging: false,
     preventInitialDocInsertion: false,
-    FirebaseDependency: Firebase
+    FirebaseDependency: Firebase,
+    appVersion: null
   }
 ): any {
   if (FirebaseDependency) {
@@ -47,7 +50,7 @@ function vuexEasyFirestore (
         config.sync.preventInitialDocInsertion = preventInitialDocInsertion
       }
       const moduleName = getKeysFromPath(config.moduleName)
-      store.registerModule(moduleName, iniModule(config, FirebaseDependency))
+      store.registerModule(moduleName, iniModule(config, FirebaseDependency, appVersion))
     })
   }
 }

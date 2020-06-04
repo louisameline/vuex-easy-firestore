@@ -16,7 +16,7 @@ import errorCheck from './errorCheckConfig'
  * @param {*} FirebaseDependency The Firebase dependency (non-instanciated), defaults to the Firebase peer dependency if left blank.
  * @returns {IStore} the module ready to be included in your vuex store
  */
-export default function (userConfig: IEasyFirestoreModule, FirebaseDependency: any): IStore {
+export default function (userConfig: IEasyFirestoreModule, FirebaseDependency: any, appVersion: any): IStore {
   // prepare state._conf
   const conf: IEasyFirestoreModule = copy(merge(
     {state: {}, mutations: {}, actions: {}, getters: {}},
@@ -50,7 +50,7 @@ export default function (userConfig: IEasyFirestoreModule, FirebaseDependency: a
     namespaced: true,
     state: merge(pluginState(), restOfState, {_conf: conf}),
     mutations: merge(userMutations, pluginMutations(merge(userState, {_conf: conf}))),
-    actions: merge(userActions, pluginActions(FirebaseDependency)),
-    getters: merge(userGetters, pluginGetters(FirebaseDependency))
+    actions: merge(userActions, pluginActions(FirebaseDependency, appVersion)),
+    getters: merge(userGetters, pluginGetters(FirebaseDependency, appVersion))
   }
 }

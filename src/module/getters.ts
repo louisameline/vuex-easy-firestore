@@ -26,7 +26,7 @@ export type IPluginGetters = {
  * @param {*} Firebase The Firebase dependency
  * @returns {AnyObject} the getters object
  */
-export default function (Firebase: any): AnyObject {
+export default function (Firebase: any, appVersion?: any): AnyObject {
   return {
     firestorePathComplete (state, getters) {
       let path = state._conf.firestorePath
@@ -126,6 +126,9 @@ export default function (Firebase: any): AnyObject {
             if (state._conf.metadata.updatedAt) {
               patchData._metadata.updatedAt = Firebase.firestore.FieldValue.serverTimestamp()
             }
+            if (state._conf.metadata.appVersion) {
+              patchData._metadata.appVersion = appVersion
+            }
           }
           //patchData.updated_by = state._sync.userId
           // clean up item
@@ -148,6 +151,9 @@ export default function (Firebase: any): AnyObject {
           // server timestamp should be retrieved afterwards
           if (state._conf.metadata.updatedAt) {
             patchData['_metadata.updatedAt'] = Firebase.firestore.FieldValue.serverTimestamp()
+          }
+          if (state._conf.metadata.appVersion) {
+            patchData._metadata.appVersion = appVersion
           }
         }
         //patchData.updated_by = state._sync.userId
@@ -185,6 +191,9 @@ export default function (Firebase: any): AnyObject {
           if (conf.metadata.updatedAt) {
             item.doc._metadata.updatedAt = Firebase.firestore.FieldValue.serverTimestamp()
           }
+          if (conf.metadata.appVersion) {
+            item.doc._metadata.appVersion = appVersion
+          }
           if (conf.metadata.createdBy) {
             item.doc._metadata.createdBy = state._sync.userId || null
           }
@@ -211,6 +220,9 @@ export default function (Firebase: any): AnyObject {
           // server timestamp should be retrieved afterwards
           if (state._conf.metadata.updatedAt) {
             doc._metadata.updatedAt = Firebase.firestore.FieldValue.serverTimestamp()
+          }
+          if (state._conf.metadata.appVersion) {
+            doc._metadata.appVersion = appVersion
           }
           if (state._conf.metadata.createdBy) {
             doc._metadata.createdBy = state._sync.userId || null
