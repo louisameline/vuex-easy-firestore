@@ -145,6 +145,7 @@ export default function (Firebase: any, appVersion: any): AnyObject {
       {state, getters, commit, dispatch},
       payload: (AnyObject | AnyObject[]) = []
     ) {
+      dispatch('setUserId')
       return new Promise((resolve, reject) => {
           // check for a hook after local change before sync
           if (state._conf.sync.insertHookBeforeSync) {

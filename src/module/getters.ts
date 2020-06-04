@@ -153,7 +153,7 @@ export default function (Firebase: any, appVersion?: any): AnyObject {
             patchData['_metadata.updatedAt'] = Firebase.firestore.FieldValue.serverTimestamp()
           }
           if (state._conf.metadata.appVersion) {
-            patchData._metadata.appVersion = appVersion
+            patchData['_metadata.appVersion'] = appVersion
           }
         }
         //patchData.updated_by = state._sync.userId
