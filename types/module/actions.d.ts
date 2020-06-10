@@ -6,4 +6,4 @@ import { AnyObject } from '../declarations';
  * @param {*} Firebase The Firebase dependency
  * @returns {AnyObject} the actions object
  */
-export default function (Firebase: any): AnyObject;
+export default function (Firebase: any, appVersion: any): AnyObject;

@@ -6,4 +6,4 @@ import { IStore, IEasyFirestoreModule } from '../declarations';
  * @param {*} FirebaseDependency The Firebase dependency (non-instanciated), defaults to the Firebase peer dependency if left blank.
  * @returns {IStore} the module ready to be included in your vuex store
  */
-export default function (userConfig: IEasyFirestoreModule, FirebaseDependency: any): IStore;
+export default function (userConfig: IEasyFirestoreModule, FirebaseDependency: any, appVersion: any): IStore;

@@ -11,10 +11,11 @@ import { increment } from './utils/incrementHelper';
  * @param {{logging?: boolean, FirebaseDependency?: any}} extraConfig An object with `logging` and `FirebaseDependency` props. `logging` enables console logs for debugging. `FirebaseDependency` is the non-instanciated Firebase class you can pass. (defaults to the Firebase peer dependency)
  * @returns {*}
  */
-declare function vuexEasyFirestore(easyFirestoreModule: IEasyFirestoreModule | IEasyFirestoreModule[], { logging, preventInitialDocInsertion, FirebaseDependency }?: {
+declare function vuexEasyFirestore(easyFirestoreModule: IEasyFirestoreModule | IEasyFirestoreModule[], { logging, preventInitialDocInsertion, FirebaseDependency, appVersion }?: {
     logging?: boolean;
     preventInitialDocInsertion?: boolean;
     FirebaseDependency?: any;
+    appVersion?: any;
 }): any;
 export { vuexEasyFirestore, arrayUnion, arrayRemove, increment };
 export default vuexEasyFirestore;

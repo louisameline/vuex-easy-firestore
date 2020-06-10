@@ -701,6 +701,7 @@ var defaultConfig = {
 function pluginState () {
     return {
         _sync: {
+            id: null,
             signedIn: false,
             userId: null,
             streaming: {},
@@ -2956,7 +2957,8 @@ function pluginMutations (userState) {
                 });
             }
             else {
-                this._vm.$delete(s, id);
+                this.unregisterModule([state._conf.moduleName, id]);
+                // this._vm.$delete(s, id)
             }
         },
         DELETE_PROP: function (state, path) {
@@ -2970,6 +2972,9 @@ function pluginMutations (userState) {
             }
             var ref = createEasyAccess.getDeepRef(searchTarget, propArr.join('.'));
             return this._vm.$delete(ref, target);
+        },
+        UNREGISTER_SUBMODULE: function (state, id) {
+            this.unregisterModule([state._conf.moduleName, id]);
         }
     };
 }
@@ -3283,10 +3288,8 @@ function getValueFromPayloadPiece(payloadPiece) {
  * @param {*} Firebase The Firebase dependency
  * @returns {AnyObject} the actions object
  */
-function pluginActions (Firebase) {
+function pluginActions (Firebase, appVersion) {
     var _this = this;
-    // this is outside of openDBChannel to work across several channels
-    var previousSnapshotData = {};
     return {
         setUserId: function (_a, userId) {
             var commit = _a.commit, getters = _a.getters;
@@ -3407,19 +3410,14 @@ function pluginActions (Firebase) {
             // 3. Create or refresh debounce & pass id to resolve
             return dispatch('handleSyncStackDebounce', id || ids);
         },
-        deleteDoc: function (_a, payload) {
+        deleteDoc: function (_a, id) {
             var state = _a.state, getters = _a.getters, commit = _a.commit, dispatch = _a.dispatch;
-            if (payload === void 0) { payload = []; }
-            // 0. payload correction (only arrays)
-            var ids = !isWhat.isArray(payload) ? [payload] : payload;
+            id = id || state._sync.id;
             // 1. Prepare for patching
             // 2. Push to syncStack
-            var deletions = state._sync.syncStack.deletions.concat(ids);
-            state._sync.syncStack.deletions = deletions;
-            if (!state._sync.syncStack.deletions.length)
-                return;
+            state._sync.syncStack.deletions.push(id);
             // 3. Create or refresh debounce & pass id to resolve
-            return dispatch('handleSyncStackDebounce', payload);
+            return dispatch('handleSyncStackDebounce', id);
         },
         deleteProp: function (_a, path) {
             var state = _a.state, getters = _a.getters, commit = _a.commit, dispatch = _a.dispatch;
@@ -3439,6 +3437,7 @@ function pluginActions (Firebase) {
             var _this = this;
             var state = _a.state, getters = _a.getters, commit = _a.commit, dispatch = _a.dispatch;
             if (payload === void 0) { payload = []; }
+            dispatch('setUserId');
             return new Promise(function (resolve, reject) {
                 // check for a hook after local change before sync
                 if (state._conf.sync.insertHookBeforeSync) {
@@ -3779,33 +3778,58 @@ function pluginActions (Firebase) {
                 });
             });
         },
-        addSubmodule: function (_a, params) {
+        addLocalSubmodule: function (_a, params) {
             var getters = _a.getters, state = _a.state, commit = _a.commit, dispatch = _a.dispatch;
             var defaultParams = {
                 id: null,
                 state: null
             };
             params = Object.assign(defaultParams, params || {});
+            // we make a copy so that each submodule has a distinct config object
+            var submoduleConfig = merge({}, state._conf.submodule);
             if (!params.id) {
                 params.id = getters.dbRef.doc().id;
             }
+            // if the user already provides data to put into the state
             if (params.state) {
+                if (typeof submoduleConfig.state === 'function') {
+                    submoduleConfig.state = submoduleConfig.state();
+                }
+                else {
+                    // TODO: clean this up
+                    console.log('The `state` property should be a function, this is probably a mistake');
+                }
                 // the fact that we pass the data as part of the config module is not good, in
                 // case we need to reset the state it won't have default values
-                state._conf.submodule.state = merge(state._conf.submodule.state, params.state);
+                submoduleConfig.state = merge(submoduleConfig.state, params.state);
             }
             // TODO: this works for first level collections only, should be improved
             var modulePath = [state._conf.moduleName, params.id];
             // TODO: make sure everything is alright like at store init, this was a little simplified.
-            this.registerModule(modulePath, iniModule(state._conf.submodule, Firebase), { preserveState: params.state === null });
+            this.registerModule(modulePath, iniModule(submoduleConfig, Firebase, appVersion), { preserveState: params.state === null });
+            state[params.id]._sync.id = params.id;
             // TODO: this should probably always be done by default by the lib
             dispatch(modulePath.join('/') + '/setPathVars', { moduleId: params.id }, { root: true });
             return modulePath;
         },
+        // this assumes the module is already created locally, we might want to change that
+        addRemoteSubmodule: function (_a, id) {
+            var getters = _a.getters, state = _a.state, commit = _a.commit, dispatch = _a.dispatch;
+            return dispatch('insertDoc', {
+                id: id,
+                doc: state[id].data
+            });
+        },
+        unregisterSubmodules: function (_a) {
+            var getters = _a.getters, state = _a.state, commit = _a.commit, dispatch = _a.dispatch;
+            getters.submoduleIds.forEach(function (id) {
+                commit('UNREGISTER_SUBMODULE', id);
+            });
+        },
         applyHooksAndUpdateState: function (// this is only on server retrievals
         _a, _b) {
             var _this = this;
-            var getters = _a.getters, state = _a.state, commit = _a.commit, dispatch = _a.dispatch, rootCommit = _a.rootCommit;
+            var getters = _a.getters, state = _a.state, commit = _a.commit, dispatch = _a.dispatch;
             var change = _b.change, id = _b.id, _c = _b.doc, doc = _c === void 0 ? {} : _c;
             return new Promise(function (resolve, reject) {
                 var store = _this;
@@ -3818,17 +3842,16 @@ function pluginActions (Firebase) {
                             delete doc._metadata;
                         }
                         var edit = function () {
-                            // TODO: if we are in a collection, this action had better be dispatched to
-                            // the document module
-                            dispatch('deleteMissingProps', _doc);
                             var _state;
                             if (getters.collectionMode) {
-                                _state = state[id];
                                 // forward to the doc module
                                 // TODO: this should not assume that we are in a root collection
-                                rootCommit(state._conf.moduleName + '/' + id + '/PATCH_DOC', _doc);
+                                dispatch(state._conf.moduleName + '/' + id + '/deleteMissingProps', _doc, { root: true });
+                                _state = state[id];
+                                commit(state._conf.moduleName + '/' + id + '/PATCH_DOC', _doc, { root: true });
                             }
                             else {
+                                dispatch('deleteMissingProps', _doc);
                                 _state = state;
                                 commit('PATCH_DOC', _doc);
                             }
@@ -3843,13 +3866,15 @@ function pluginActions (Firebase) {
                             // relevant for collections only
                             case 'added':
                                 // commit('INSERT_DOC', _doc)
+                                // if the module already exists (happens when we recreated it from local storage
+                                // but Firestore doesn't know about it)
                                 if (store.hasModule([state._conf.moduleName, id])) {
                                     // transfer to the existing submodule
                                     edit();
                                 }
                                 else {
                                     // create the submodule
-                                    dispatch('addSubmodule', {
+                                    dispatch('addLocalSubmodule', {
                                         id: id,
                                         state: { data: _doc, _metadata: metadata_1 }
                                     });
@@ -3857,7 +3882,6 @@ function pluginActions (Firebase) {
                                 break;
                             // relevant for collections only
                             case 'removed':
-                                // TODO: make this work with the submodule system
                                 commit('DELETE_DOC', id);
                                 break;
                             default:
@@ -3873,7 +3897,7 @@ function pluginActions (Firebase) {
                 // get user set sync hook function
                 // TODO: the hook should be called on the child directly. This wouldn't work
                 // if there were several possible module classes for a same collection
-                var conf = getters.collectionMode ? state._conf.submodule : state._conf, syncHookFn = conf.serverChange[change + 'Hook'];
+                var conf = getters.collectionMode ? state._conf.submodule : state._conf, syncHookFn = conf.serverChange ? conf.serverChange[change + 'Hook'] : null;
                 if (isWhat.isFunction(syncHookFn)) {
                     syncHookFn(storeUpdateFn, doc, id, store, 'server', change);
                 }
@@ -3885,11 +3909,7 @@ function pluginActions (Firebase) {
         deleteMissingProps: function (_a, doc) {
             var state = _a.state, getters = _a.getters, commit = _a.commit;
             var defaultValues = getters.defaultValues;
-            var searchTarget = (getters.collectionMode)
-                // TODO: this assumes that the collection and the doc have the same statePropName.
-                // Should probably be made the same for everything
-                ? (state._conf.statePropName ? getters.storeRef[doc.id][state._conf.statePropName] : getters.storeRef[doc.id])
-                : getters.storeRef;
+            var searchTarget = state._conf.statePropName ? state[state._conf.statePropName] : state;
             var clearObject = function (toBeClearedObj, RefObj, path) {
                 if (path === void 0) { path = []; }
                 for (var key in toBeClearedObj) {
@@ -3911,19 +3931,58 @@ function pluginActions (Firebase) {
             };
             clearObject(searchTarget, doc);
         },
+        /* IMPORTANT NOTE: a `documentSnapshot`'s `fromCache` metadata is not what it
+         * seems at all. Firestore can set it to `true` even if the data comes from the
+         * server, and to `false` even if it comes from cache: it's actually a way to say
+         * "Firestore is planning on making a fetch request as soon as possible as it's
+         * likely (sometimes certain) that there is data to load". An honest name for
+         * `fromCache` would be `hasPendingReads`.
+         *
+         * Our assumptions are the following:
+         * 1) A local action triggers an immediate documentSnapshot with this metadata:
+         * `fromCache == true | false && hasPendingWrites == true`
+         * (`fromCache` being `true` only at initial load if we load from cache) and
+         * another snapshot after Firestore saved the data with:
+         * `fromCache == false && hasPendingWrites == false`
+         * 2) A remote change triggers a documentSnapshot with this metadata:
+         *  `fromCache == false && hasPendingWrites == true | false`
+         * (`hasPendingWrites` being true only if the are local changes still pending)
+         * 3) In collection mode, the querySnapshot has its own `fromCache` metadata
+         * which will be `true` if the data comes from cache at initial load or if
+         * the snapshot is remote but is to be followed by other queued snapshots
+         * 4) We don't expect the initial load from cache to be done in several
+         * querySnapshots (TODO: check)
+         *
+         * Example 1: if our data is up-to-date and that a write request is made, the
+         * first document snapshot will have:
+         * `fromCache === false && hasPendingWrites === true`,
+         * the 2nd snapshot will have:
+         * `fromCache === false && hasPendingWrites === false`
+         *
+         * Example 2: if there are 150 documents to load at the same time, Firestore may
+         * split them them in 3 (or whatever) batches, so we'll get three snapshots:
+         * `fromCache === true && hasPendingWrites === false`
+         * `fromCache === true && hasPendingWrites === false`
+         * `fromCache === false && hasPendingWrites === false`
+         * (`hasPendingWrites` maybe be `true` is we have a remotely-unsaved local
+         * change while we receive the data)
+         */
         openDBChannel: function (_a, parameters) {
             var _this = this;
             var getters = _a.getters, state = _a.state, commit = _a.commit, dispatch = _a.dispatch;
-            if (parameters === void 0) { parameters = { clauses: {}, pathVariables: {}, fetchedCallback: null }; }
-            if (!isWhat.isPlainObject(parameters))
-                parameters = {};
+            if (parameters === void 0) { parameters = {
+                clauses: {},
+                pathVariables: {},
+                debug: false,
+                fetchedCallback: null
+            }; }
             /* COMPATIBILITY START
              * this ensures backward compatibility for people who passed pathVariables and
              * clauses directly at the root of the `parameters` object. Can be removed in
              * a later version
              */
             if (!parameters.clauses && !parameters.pathVariables) {
-                var pathVariables_3 = Object.assign({}, parameters);
+                var pathVariables_3 = Object.assign({}, parameters || {});
                 // @ts-ignore
                 delete pathVariables_3.where;
                 // @ts-ignore
@@ -3936,6 +3995,7 @@ function pluginActions (Firebase) {
                 parameters = {
                     clauses: parameters,
                     pathVariables: pathVariables_3,
+                    debug: false,
                     fetchedCallback: parameters.fetchedCallback
                 };
             }
@@ -3943,10 +4003,37 @@ function pluginActions (Firebase) {
             var defaultParameters = {
                 clauses: {},
                 pathVariables: {},
+                debug: false,
                 fetchedCallback: null
             };
-            parameters = Object.assign(defaultParameters, parameters);
+            parameters = Object.assign(defaultParameters, parameters || {});
+            // set data that will be used
             dispatch('setUserId');
+            commit('SET_SYNCCLAUSES', parameters.clauses);
+            commit('SET_PATHVARS', parameters.pathVariables);
+            var identifier = createFetchIdentifier({
+                where: state._conf.sync.where,
+                orderBy: state._conf.sync.orderBy,
+                pathVariables: state._sync.pathVariables
+            });
+            if (isWhat.isFunction(state._sync.unsubscribe[identifier])) {
+                var streamAlreadyOpenError = "openDBChannel was already called for these clauses and pathvariables. Identifier: " + identifier;
+                if (state._conf.logging) {
+                    console.log(streamAlreadyOpenError);
+                }
+                return Promise.reject(streamAlreadyOpenError);
+            }
+            // getters.dbRef should already have pathVariables swapped out
+            var dbRef = getters.dbRef;
+            // apply where and orderBy clauses
+            if (getters.collectionMode) {
+                getters.getWhereArrays().forEach(function (whereParams) {
+                    dbRef = dbRef.where.apply(dbRef, whereParams);
+                });
+                if (state._conf.sync.orderBy.length) {
+                    dbRef = dbRef.orderBy.apply(dbRef, state._conf.sync.orderBy);
+                }
+            }
             // creates promises that can be resolved from outside their scope and that
             // can give their status
             var nicePromise = function () {
@@ -3962,50 +4049,15 @@ function pluginActions (Firebase) {
                     m.reject = reject;
                 });
                 Object.assign(p, m);
-                p
-                    // @ts-ignore
-                    .then(function () { return p.isFulfilled = true; })
+                // @ts-ignore
+                p.then(function () { return p.isFulfilled = true; })
                     // @ts-ignore
                     .catch(function () { return p.isRejected = true; })
                     // @ts-ignore
                     .finally(function () { return p.isPending = false; });
                 return p;
             };
-            // set state for clauses and pathVariables
-            commit('SET_SYNCCLAUSES', parameters.clauses);
-            commit('SET_PATHVARS', parameters.pathVariables);
-            var identifier = createFetchIdentifier({
-                where: state._conf.sync.where,
-                orderBy: state._conf.sync.orderBy,
-                pathVariables: state._sync.pathVariables
-            });
-            if (isWhat.isFunction(state._sync.unsubscribe[identifier])) {
-                var channelAlreadyOpenError = "openDBChannel was already called for these clauses and pathvariables. Identifier: " + identifier;
-                if (state._conf.logging) {
-                    console.log(channelAlreadyOpenError);
-                }
-                return Promise.reject(channelAlreadyOpenError);
-            }
-            // getters.dbRef should already have pathVariables swapped out
-            var dbRef = getters.dbRef;
-            // apply where and orderBy clauses
-            if (getters.collectionMode) {
-                getters.getWhereArrays().forEach(function (whereParams) {
-                    dbRef = dbRef.where.apply(dbRef, whereParams);
-                });
-                if (state._conf.sync.orderBy.length) {
-                    dbRef = dbRef.orderBy.apply(dbRef, state._conf.sync.orderBy);
-                }
-            }
-            // log
-            if (state._conf.logging) {
-                console.log("%c openDBChannel for Firestore PATH: " + getters.firestorePathComplete + " [" + state._conf.firestorePath + "]", 'color: goldenrod');
-            }
-            var initialPromise = nicePromise();
-            var refreshedPromise = nicePromise();
-            var streamingPromise = nicePromise();
-            var gotFirstLocalResponse = false;
-            var gotFirstServerResponse = false;
+            var initialPromise = nicePromise(), refreshedPromise = nicePromise(), streamingPromise = nicePromise();
             var streamingStart = function () {
                 // create a promise for the life of the snapshot that can be resolved from
                 // outside its scope. This promise will be resolved when the user calls
@@ -4033,166 +4085,178 @@ function pluginActions (Firebase) {
                 state._sync.unsubscribe[identifier] = null;
                 state._sync.streaming[identifier] = null;
             };
+            /* This function does not interact directly with the stream or the promises of
+             * openDBChannel: instead, it returns an object which may be used (or not) by
+             * the caller. Basically we'll use the response in doc mode only.
+             *
+             * In collection mode, the parameter is actually a `queryDocumentSnapshot`, which
+             * has the same API as a `documentSnapshot`.
+             */
             var processDocument = function (documentSnapshot, changeType) {
-                if (changeType === void 0) { changeType = 'modified'; }
-                var data = documentSnapshot.data();
-                var dataJSON = JSON.stringify(data);
-                var previousDataJSON = previousSnapshotData[documentSnapshot.id];
-                var response = Promise.resolve();
-                // this condition lets us ignore the irrelevant "metadata-only changes" events
-                // that we get since `includeMetadataChanges` is `true` and that are meaningless
-                // for our local store. As a nice side effect, it will also ignore most "data
-                // changes" which actually didn't alter the data, including across several
-                // channels. Some rare false positives may still happen as this isn't a deep
-                // equal, but at least it's fast.
-                // We check if the initial promise is pending as the channel could be opened
-                // as we already have the data in memory, in which case we need to make sure
-                // the state is populated and the hook callback called.
-                // Note: `snapshot.isEqual` can't be used: it's useless as a different
-                // `fromCache` value makes it return false
-                if (initialPromise.isPending || !previousDataJSON || previousDataJSON !== dataJSON) {
-                    var doc = getters.cleanUpRetrievedDoc(data, documentSnapshot.id);
-                    response = dispatch('applyHooksAndUpdateState', { change: changeType, id: documentSnapshot.id, doc: doc });
-                    previousSnapshotData[documentSnapshot.id] = dataJSON;
+                // debug message
+                if (parameters.debug) {
+                    console.log("%c Document " + documentSnapshot.id + ": fromCache == " + (documentSnapshot.metadata.fromCache ? 'true' : 'false') + " && hasPendingWrites == " + (documentSnapshot.metadata.hasPendingWrites ? 'true' : 'false'), 'padding-left: 40px');
                 }
-                return response;
+                // the promise that this function returns always resolves with this object
+                var promisePayload = {
+                    initialize: false,
+                    refresh: false,
+                    stop: null
+                };
+                var promise = Promise.resolve(promisePayload);
+                // If the data is not up-to-date with the server yet.
+                // This should happen only when we are loading from cache at initial load.
+                if (documentSnapshot.metadata.fromCache) {
+                    // If it's the very first snapshot, we are at the initial app load. If so, we'll
+                    // use the data from cache to populate the state. Otherwise we can ignore it.
+                    if (initialPromise.isPending) {
+                        // pass the signal that the doc is ready to initialize
+                        promisePayload.initialize = true;
+                        // TODO: the capacity of hooks to "abort" the insertion makes little sense. It's
+                        // a problem if they leave their promise pending. To be changed
+                        // TODO: this is actually not useful when the store is persisted with Vuex-persist
+                        promise = dispatch('applyHooksAndUpdateState', {
+                            // TODO: for backward compatibility, we keep this as "modified" in doc mode
+                            // but it would make sense in a future version to change to "added", as this is
+                            // the initial load and the user may want to act on it differently
+                            change: changeType || 'modified',
+                            id: documentSnapshot.id,
+                            doc: getters.cleanUpRetrievedDoc(documentSnapshot.data(), documentSnapshot.id)
+                        })
+                            .then(function () { return promisePayload; });
+                    }
+                }
+                // if the data is up-to-date with the server
+                else {
+                    // if the remote document exists (this is always `true` when we are in
+                    // collection mode)
+                    if (documentSnapshot.exists) {
+                        if (parameters.fetchedCallback) {
+                            parameters.fetchedCallback();
+                        }
+                        // the doc will actually already be initialized at this point unless it couldn't
+                        // be loaded from cache (no persistence, or never previously loaded)
+                        promisePayload.initialize = true;
+                        // also pass the signal that the doc has been refreshed
+                        promisePayload.refresh = true;
+                        promise = dispatch('applyHooksAndUpdateState', {
+                            // TODO: same as above, this remains for backward compatibilty but should be
+                            // changed later by the commented line below
+                            change: changeType || 'modified',
+                            // if the document has not been loaded from cache before, this is an addition
+                            //change: changeType || (initialPromise.isPending ? 'added' : 'modified'),
+                            id: documentSnapshot.id,
+                            doc: getters.cleanUpRetrievedDoc(documentSnapshot.data(), documentSnapshot.id)
+                        })
+                            .then(function () { return promisePayload; });
+                    }
+                    // the document doesn't exist yet (necessarily means we are in doc mode)
+                    else {
+                        // if the config allows to insert an initial document
+                        if (!state._conf.sync.preventInitialDocInsertion) {
+                            // a notification message in the console
+                            if (state._conf.logging) {
+                                var message = refreshedPromise.isPending
+                                    ? 'inserting initial doc'
+                                    : 'recreating doc after remote deletion';
+                                console.log("%c [vuex-easy-firestore] " + message + "; for Firestore PATH: " + getters.firestorePathComplete + " [" + state._conf.firestorePath + "]", 'color: MediumSeaGreen');
+                            }
+                            // try to insert the doc
+                            promise = dispatch('insertInitialDoc')
+                                .then(function () {
+                                promisePayload.initialize = true;
+                                promisePayload.refresh = true;
+                                return promisePayload;
+                            })
+                                .catch(function (error) {
+                                // we close the stream ourselves. Firestore does not, as it leaves the
+                                // stream open as long as the user has read rights on the document, even
+                                // if it does not exist. But since the dev enabled `insertInitialDoc`,
+                                // it makes some sense to close as we can assume the user should have had
+                                // write rights
+                                promisePayload.stop = error;
+                                return promisePayload;
+                            });
+                        }
+                        // we are not allowed to (re)create the doc: close the stream and reject
+                        else {
+                            promisePayload.stop = 'preventInitialDocInsertion';
+                        }
+                    }
+                }
+                return promise;
             };
-            var processCollection = function (docChanges) {
-                var promises = [];
-                docChanges.forEach(function (change) {
-                    var p = processDocument(change.doc, change.type);
-                    promises.push(p);
-                });
-                // make Promise.all resolve when all promises are settled
-                var settledPromises = promises.map(function (p) { return p.catch(function () { }); });
-                return Promise.all(settledPromises);
-            };
+            // log the fact that we'll now try to open the stream
+            if (state._conf.logging) {
+                console.log("%c openDBChannel for Firestore PATH: " + getters.firestorePathComplete + " [" + state._conf.firestorePath + "]", 'color: goldenrod');
+            }
+            // open the stream
             var unsubscribe = dbRef.onSnapshot(
-            // this allows us to set the `gotFirstServerResponse` variable accurately, but
-            // most of all to make the `refreshed` promise work well. Without it, the first
-            // actual server response may not trigger the `onSnapshot()` callback
+            // this lets us know when our data is up-to-date with the server
             { includeMetadataChanges: true }, 
-            // this is either a documentSnapshot or a querySnapshot
+            // the parameter is either a querySnapshot (collection mode) or a
+            // documentSnapshot (doc mode)
             function (snapshot) { return __awaiter(_this, void 0, void 0, function () {
-                var message, error_1;
+                var docChanges, promises_1, resp;
                 return __generator(this, function (_a) {
                     switch (_a.label) {
                         case 0:
-                            if (!snapshot.metadata.fromCache) return [3 /*break*/, 1];
-                            // if it's the very first call, we are at the initial app load. If so, we'll use
-                            // the data in cache (if available) to populate the state
-                            if (!gotFirstLocalResponse) {
-                                // 'doc' mode:
-                                if (!getters.collectionMode) {
-                                    // we don't want to resolve the initial promise without data.
-                                    // note: there is no data if it was never loaded or if there is no persistence
-                                    // on the device, so at this point we don't want to insert an initial document
-                                    if (snapshot.exists) {
-                                        processDocument(snapshot)
-                                            .then(streamingStart);
-                                    }
-                                }
-                                // 'collection' mode
-                                else {
-                                    processCollection(snapshot.docChanges())
-                                        // rejected if the insertion of some documents was aborted by the user callback
-                                        .catch(function () { })
-                                        // fullfill anyway
-                                        .then(streamingStart);
-                                }
-                                gotFirstLocalResponse = true;
-                            }
-                            // not the first local call we get: this is the result of a local modification
-                            // which doesn't require to do anything more to the state, we just need to
-                            // store the snapshot for comparison when we get the server response
-                            else {
-                                // 'doc' mode:
-                                if (!getters.collectionMode) {
-                                    previousSnapshotData[snapshot.id] = JSON.stringify(snapshot.data());
-                                }
-                                // 'collection' mode
-                                else {
-                                    snapshot.docChanges().forEach(function (change) {
-                                        previousSnapshotData[change.doc.id] = JSON.stringify(change.doc.data());
-                                    });
-                                }
-                            }
-                            return [3 /*break*/, 11];
-                        case 1:
-                            if (!!getters.collectionMode) return [3 /*break*/, 9];
-                            if (!snapshot.exists) return [3 /*break*/, 2];
-                            if (parameters.fetchedCallback)
+                            if (!getters.collectionMode) return [3 /*break*/, 2];
+                            if (parameters.fetchedCallback) {
                                 parameters.fetchedCallback();
-                            processDocument(snapshot)
-                                .then(function () {
-                                // the promise is still pending at this point only if the doc couldn't be loaded
-                                // from cache (no persistence, or never previously loaded)
-                                if (initialPromise.isPending) {
-                                    streamingStart();
-                                }
-                                if (refreshedPromise.isPending) {
-                                    refreshedPromise.resolve();
-                                }
+                            }
+                            docChanges = snapshot.docChanges({ includeMetadataChanges: true }), promises_1 = new Array(docChanges.length);
+                            // debug messages
+                            if (parameters.debug) {
+                                console.log("%c QUERY SNAPSHOT received for `" + state._conf.moduleName + "`", 'font-weight: bold');
+                                console.log("%c fromCache == " + (snapshot.metadata.fromCache ? 'true' : 'false') + " && hasPendingWrites == " + (snapshot.metadata.hasPendingWrites ? 'true' : 'false'), 'padding-left: 20px; font-style: italic');
+                                console.log(docChanges.length
+                                    ? "%c " + docChanges.length + " changed document snapshots included:"
+                                    : "%c No changed document snapshots included.", 'padding-left: 20px; ');
+                            }
+                            // process doc changes
+                            docChanges.forEach(function (change, i) {
+                                promises_1[i] = processDocument(change.doc, change.type);
                             });
-                            return [3 /*break*/, 8];
-                        case 2:
-                            if (!!state._conf.sync.preventInitialDocInsertion) return [3 /*break*/, 7];
-                            if (state._conf.logging) {
-                                message = gotFirstServerResponse
-                                    ? 'recreating doc after remote deletion'
-                                    : 'inserting initial doc';
-                                console.log("%c [vuex-easy-firestore] " + message + "; for Firestore PATH: " + getters.firestorePathComplete + " [" + state._conf.firestorePath + "]", 'color: MediumSeaGreen');
-                            }
-                            _a.label = 3;
-                        case 3:
-                            _a.trys.push([3, 5, , 6]);
-                            return [4 /*yield*/, dispatch('insertInitialDoc')];
-                        case 4:
+                            return [4 /*yield*/, Promise.all(promises_1)
+                                // no matter where the data came from, we can resolve the initial promise
+                            ];
+                        case 1:
                             _a.sent();
-                            if (parameters.fetchedCallback)
-                                parameters.fetchedCallback();
-                            // if the initial document was successfully inserted
+                            // no matter where the data came from, we can resolve the initial promise
                             if (initialPromise.isPending) {
                                 streamingStart();
                             }
-                            if (refreshedPromise.isPending) {
-                                refreshedPromise.resolve();
-                            }
-                            return [3 /*break*/, 6];
-                        case 5:
-                            error_1 = _a.sent();
-                            // we close the channel ourselves. Firestore does not, as it leaves the
-                            // channel open as long as the user has read rights on the document, even
-                            // if it does not exist. But since the dev enabled `insertInitialDoc`,
-                            // it makes some sense to close as we can assume the user should have had
-                            // write rights
-                            streamingStop(error_1);
-                            return [3 /*break*/, 6];
-                        case 6: return [3 /*break*/, 8];
-                        case 7:
-                            streamingStop('preventInitialDocInsertion');
-                            _a.label = 8;
-                        case 8: return [3 /*break*/, 10];
-                        case 9:
-                            if (parameters.fetchedCallback)
-                                parameters.fetchedCallback();
-                            processCollection(snapshot.docChanges())
-                                // rejected if the insertion of some documents was aborted by the user callback
-                                .catch(function () { })
-                                // fullfill anyway
-                                .then(function () {
-                                if (initialPromise.isPending) {
-                                    streamingStart();
-                                }
+                            // if all the data is up-to-date with the server
+                            if (!snapshot.metadata.fromCache) {
+                                // if it's the first time it's refreshed
                                 if (refreshedPromise.isPending) {
                                     refreshedPromise.resolve();
                                 }
-                            });
-                            _a.label = 10;
-                        case 10:
-                            gotFirstServerResponse = true;
-                            _a.label = 11;
-                        case 11: return [2 /*return*/];
+                            }
+                            return [3 /*break*/, 4];
+                        case 2:
+                            // debug messages
+                            if (parameters.debug) {
+                                console.log("%c DOCUMENT SNAPSHOT received for `" + state._conf.moduleName + "`", 'font-weight: bold');
+                            }
+                            return [4 /*yield*/, processDocument(snapshot)];
+                        case 3:
+                            resp = _a.sent();
+                            if (resp.initialize && initialPromise.isPending) {
+                                streamingStart();
+                            }
+                            if (resp.refresh && refreshedPromise.isPending) {
+                                if (parameters.fetchedCallback) {
+                                    parameters.fetchedCallback();
+                                }
+                                refreshedPromise.resolve();
+                            }
+                            if (resp.stop) {
+                                streamingStop(resp.stop);
+                            }
+                            _a.label = 4;
+                        case 4: return [2 /*return*/];
                     }
                 });
             }); }, streamingStop);
@@ -4207,9 +4271,9 @@ function pluginActions (Firebase) {
                 orderBy: state._conf.sync.orderBy,
                 pathVariables: state._sync.pathVariables
             });
-            var unsubscribeDBChannel = state._sync.unsubscribe[identifier];
-            if (isWhat.isFunction(unsubscribeDBChannel)) {
-                unsubscribeDBChannel();
+            var unsubscribeStream = state._sync.unsubscribe[identifier];
+            if (isWhat.isFunction(unsubscribeStream)) {
+                unsubscribeStream();
                 state._sync.streaming[identifier].resolve();
                 state._sync.streaming[identifier] = null;
                 state._sync.unsubscribe[identifier] = null;
@@ -4357,33 +4421,43 @@ function pluginActions (Firebase) {
             }
             // define the store update
             function storeUpdateFn(_id) {
-                // id is a path
-                var pathDelete = !getters.collectionMode && _id;
-                if (pathDelete) {
-                    var path = _id;
-                    if (!path)
-                        return error('delete-missing-path');
-                    commit('DELETE_PROP', path);
-                    // check for a hook after local change before sync
-                    if (state._conf.sync.deleteHookBeforeSync) {
-                        return state._conf.sync.deleteHookBeforeSync(firestoreUpdateFnPath, path, store);
+                // doc mode
+                if (!getters.collectionMode) {
+                    // id is a path to delete on the document
+                    if (_id) {
+                        var path = _id;
+                        commit('DELETE_PROP', path);
+                        // check for a hook after local change before sync
+                        if (state._conf.sync.deleteHookBeforeSync) {
+                            return state._conf.sync.deleteHookBeforeSync(firestoreUpdateFnPath, path, store);
+                        }
+                        return firestoreUpdateFnPath(path);
                     }
-                    return firestoreUpdateFnPath(path);
+                    else {
+                        // empty the data
+                        commit('DELETE_DOC');
+                        // restore the default empty state back
+                        commit('RESET_VUEX_EASY_FIRESTORE_STATE');
+                        dispatch('setUserId');
+                        if (state._conf.sync.deleteHookBeforeSync) {
+                            return state._conf.sync.deleteHookBeforeSync(firestoreUpdateFnId, null, store);
+                        }
+                        return firestoreUpdateFnPath(null);
+                    }
                 }
-                if (getters.collectionMode && !_id)
-                    return error('delete-missing-id');
-                if (_id) {
-                    commit('DELETE_DOC', _id);
-                }
+                // collection mode
                 else {
-                    commit('RESET_VUEX_EASY_FIRESTORE_STATE');
-                    dispatch('setUserId');
+                    if (_id) {
+                        commit('DELETE_DOC', _id);
+                        if (state._conf.sync.deleteHookBeforeSync) {
+                            return state._conf.sync.deleteHookBeforeSync(firestoreUpdateFnId, _id, store);
+                        }
+                        return firestoreUpdateFnPath(_id);
+                    }
+                    else {
+                        return error('delete-missing-id');
+                    }
                 }
-                // check for a hook after local change before sync
-                if (state._conf.sync.deleteHookBeforeSync) {
-                    return state._conf.sync.deleteHookBeforeSync(firestoreUpdateFnId, _id, store);
-                }
-                return firestoreUpdateFnId(_id);
             }
             // check for a hook before local change
             if (state._conf.sync.deleteHook) {
@@ -4447,7 +4521,7 @@ function pluginActions (Firebase) {
  * @param {*} Firebase The Firebase dependency
  * @returns {AnyObject} the getters object
  */
-function pluginGetters (Firebase) {
+function pluginGetters (Firebase, appVersion) {
     return {
         firestorePathComplete: function (state, getters) {
             var path = state._conf.firestorePath;
@@ -4534,6 +4608,10 @@ function pluginGetters (Firebase) {
                         patchData = doc;
                     }
                     // set default fields
+                    if (state._metadata) {
+                        // TODO: we don't want to synchronize every property in _metadata
+                        patchData._metadata = merge({}, state._metadata);
+                    }
                     if (state._conf.metadata) {
                         if (!patchData._metadata) {
                             patchData._metadata = {};
@@ -4542,6 +4620,9 @@ function pluginGetters (Firebase) {
                         // server timestamp should be retrieved afterwards
                         if (state._conf.metadata.updatedAt) {
                             patchData._metadata.updatedAt = Firebase.firestore.FieldValue.serverTimestamp();
+                        }
+                        if (state._conf.metadata.appVersion) {
+                            patchData._metadata.appVersion = appVersion;
                         }
                     }
                     //patchData.updated_by = state._sync.userId
@@ -4564,13 +4645,13 @@ function pluginGetters (Firebase) {
                 var patchData = {};
                 // set default fields
                 if (state._conf.metadata) {
-                    if (!patchData._metadata) {
-                        patchData._metadata = {};
-                    }
-                    // we'll have different possible values for updated at, to know if the
+                    // todo: have different possible values for updated at, to know if the
                     // server timestamp should be retrieved afterwards
                     if (state._conf.metadata.updatedAt) {
-                        patchData._metadata.updatedAt = Firebase.firestore.FieldValue.serverTimestamp();
+                        patchData['_metadata.updatedAt'] = Firebase.firestore.FieldValue.serverTimestamp();
+                    }
+                    if (state._conf.metadata.appVersion) {
+                        patchData['_metadata.appVersion'] = appVersion;
                     }
                 }
                 //patchData.updated_by = state._sync.userId
@@ -4588,7 +4669,7 @@ function pluginGetters (Firebase) {
                     cleanedPath = path;
                 }
                 cleanedPatchData[cleanedPath] = Firebase.firestore.FieldValue.delete();
-                cleanedPatchData.id = id;
+                //cleanedPatchData.id = id
                 return _a = {}, _a[id] = cleanedPatchData, _a;
             };
         },
@@ -4608,6 +4689,9 @@ function pluginGetters (Firebase) {
                     }
                     if (conf.metadata.updatedAt) {
                         item.doc._metadata.updatedAt = Firebase.firestore.FieldValue.serverTimestamp();
+                    }
+                    if (conf.metadata.appVersion) {
+                        item.doc._metadata.appVersion = appVersion;
                     }
                     if (conf.metadata.createdBy) {
                         item.doc._metadata.createdBy = state._sync.userId || null;
@@ -4635,6 +4719,9 @@ function pluginGetters (Firebase) {
                     // server timestamp should be retrieved afterwards
                     if (state._conf.metadata.updatedAt) {
                         doc._metadata.updatedAt = Firebase.firestore.FieldValue.serverTimestamp();
+                    }
+                    if (state._conf.metadata.appVersion) {
+                        doc._metadata.appVersion = appVersion;
                     }
                     if (state._conf.metadata.createdBy) {
                         doc._metadata.createdBy = state._sync.userId || null;
@@ -4790,7 +4877,7 @@ function errorCheck (config) {
  * @param {*} FirebaseDependency The Firebase dependency (non-instanciated), defaults to the Firebase peer dependency if left blank.
  * @returns {IStore} the module ready to be included in your vuex store
  */
-function iniModule (userConfig, FirebaseDependency) {
+function iniModule (userConfig, FirebaseDependency, appVersion) {
     // prepare state._conf
     var conf = copy(merge({ state: {}, mutations: {}, actions: {}, getters: {} }, defaultConfig, userConfig));
     if (!errorCheck(conf))
@@ -4819,8 +4906,8 @@ function iniModule (userConfig, FirebaseDependency) {
         namespaced: true,
         state: merge(pluginState(), restOfState, { _conf: conf }),
         mutations: merge(userMutations, pluginMutations(merge(userState, { _conf: conf }))),
-        actions: merge(userActions, pluginActions(FirebaseDependency)),
-        getters: merge(userGetters, pluginGetters(FirebaseDependency))
+        actions: merge(userActions, pluginActions(FirebaseDependency, appVersion)),
+        getters: merge(userGetters, pluginGetters(FirebaseDependency, appVersion))
     };
 }
 
@@ -4837,8 +4924,9 @@ function vuexEasyFirestore(easyFirestoreModule, _a) {
     var _b = _a === void 0 ? {
         logging: false,
         preventInitialDocInsertion: false,
-        FirebaseDependency: Firebase$1
-    } : _a, _c = _b.logging, logging = _c === void 0 ? false : _c, _d = _b.preventInitialDocInsertion, preventInitialDocInsertion = _d === void 0 ? false : _d, _e = _b.FirebaseDependency, FirebaseDependency = _e === void 0 ? Firebase$1 : _e;
+        FirebaseDependency: Firebase$1,
+        appVersion: null
+    } : _a, _c = _b.logging, logging = _c === void 0 ? false : _c, _d = _b.preventInitialDocInsertion, preventInitialDocInsertion = _d === void 0 ? false : _d, _e = _b.FirebaseDependency, FirebaseDependency = _e === void 0 ? Firebase$1 : _e, _f = _b.appVersion, appVersion = _f === void 0 ? null : _f;
     if (FirebaseDependency) {
         setFirebaseDependency(FirebaseDependency);
     }
@@ -4853,7 +4941,7 @@ function vuexEasyFirestore(easyFirestoreModule, _a) {
                 config.sync.preventInitialDocInsertion = preventInitialDocInsertion;
             }
             var moduleName = createEasyAccess.getKeysFromPath(config.moduleName);
-            store.registerModule(moduleName, iniModule(config, FirebaseDependency));
+            store.registerModule(moduleName, iniModule(config, FirebaseDependency, appVersion));
         });
     };
 }
@@ -4889,7 +4977,7 @@ var easyFirestores = vuexEasyFirestore([
     defaultValuesSetupDocProp,
     multipleOpenDBChannels,
     docModeWithPathVar
-], { logging: false, FirebaseDependency: Firebase$1 });
+], { logging: false, FirebaseDependency: Firebase$1, appVersion: '0' });
 var storeObj = {
     plugins: [easyFirestores, easyAccess]
 };
