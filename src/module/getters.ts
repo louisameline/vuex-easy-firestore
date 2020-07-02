@@ -266,7 +266,7 @@ export default function (Firebase: any, appVersion?: any): AnyObject {
       return state._conf.syncActivation === true
         // TODO: this should not read from my custom config module, it should be stored
         // properly by the lib
-        || (state._conf.syncActivation === 'global' && rootState.local.data.syncGloballyEnabled === true)
+        || (state._conf.syncActivation === 'global' && rootState.local.data.syncActivationGlobal === true)
         // the local activation should be stored outside the store
         || (state._conf.syncActivation === 'local' && state._local.syncEnabled === true)
     },

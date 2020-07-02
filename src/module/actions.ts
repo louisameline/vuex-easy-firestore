@@ -474,10 +474,14 @@ export default function (Firebase: any, appVersion: any): AnyObject {
         // case we need to reset the state it won't have default values
         submoduleConfig.state = merge(submoduleConfig.state, params.state)
       }
+      else {
+        // same here, we should not alter the default state
+        submoduleConfig.state = state[params.id]
+      }
       // TODO: this works for first level collections only, should be improved
       const modulePath = [state._conf.moduleName, params.id]
       // TODO: make sure everything is alright like at store init, this was a little simplified.
-      this.registerModule(modulePath, iniModule(submoduleConfig, Firebase, appVersion), { preserveState: params.state === null })
+      this.registerModule(modulePath, iniModule(submoduleConfig, Firebase, appVersion))
       state[params.id]._sync.id = params.id
       // TODO: this should probably always be done by default by the lib
       dispatch(modulePath.join('/') + '/setPathVars', { moduleId: params.id }, { root: true })

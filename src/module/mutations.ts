@@ -1,5 +1,7 @@
-import { isArray, isFunction, isNumber } from 'is-what'
+import { isArray, isFunction, isNumber, isPlainObject } from 'is-what'
 import { getDeepRef } from 'vuex-easy-access'
+import { flattenObject } from 'flatten-anything'
+import pathToProp from 'path-to-prop'
 import logError from './errors'
 import copy from 'copy-anything'
 import merge from 'merge-anything'
@@ -7,6 +9,38 @@ import { AnyObject } from '../declarations'
 import { isArrayHelper } from '../utils/arrayHelpers'
 import { isIncrementHelper } from '../utils/incrementHelper'
 import getStateWithSync from './state'
+
+function convertHelpers (originVal, newVal) {
+  if (isArray(originVal) && isArrayHelper(newVal)) {
+    newVal = newVal.executeOn(originVal)
+  }
+  if (isNumber(originVal) && isIncrementHelper(newVal)) {
+    newVal = newVal.executeOn(originVal)
+  }
+  return newVal // always return newVal as fallback!!
+}
+
+/**
+ * Creates the params needed to $set a target based on a nested.path
+ *
+ * @param {object} target
+ * @param {string} path
+ * @param {*} value
+ * @returns {[object, string, any]}
+ */
+function getSetParams (target: object, path: string, value: any): [object, string, any] {
+  const pathParts = path.split('.')
+  const prop = pathParts.pop()
+  const pathParent = pathParts.join('.')
+  const objectToSetPropTo = pathToProp(target, pathParent)
+  if (!isPlainObject(objectToSetPropTo)) {
+    // the target doesn't have an object ready at this level to set the value to
+    // so we need to step down a level and try again
+    return getSetParams(target, pathParent, { [prop]: value })
+  }
+  const valueToSet = value
+  return [objectToSetPropTo, prop, valueToSet]
+}
 
 /**
  * a function returning the mutations object
@@ -87,21 +121,17 @@ export default function (userState: object): AnyObject {
         Object.assign(state._metadata, patches._metadata)
         delete patches._metadata
       }
-      return Object.keys(patches).forEach(key => {
-        let newVal = patches[key]
-        // Merge if exists
-        function helpers (originVal, newVal) {
-          if (isArray(originVal) && isArrayHelper(newVal)) {
-            newVal = newVal.executeOn(originVal)
-          }
-          if (isNumber(originVal) && isIncrementHelper(newVal)) {
-            newVal = newVal.executeOn(originVal)
-          }
-          return newVal // always return newVal as fallback!!
-        }
-        newVal = merge({extensions: [helpers]}, ref[key], patches[key])
-        this._vm.$set(ref, key, newVal)
-      })
+      const patchesFlat = flattenObject(patches)
+      for (const [path, value] of Object.entries(patchesFlat)) {
+        const targetVal = pathToProp(ref, path)
+        const newVal = convertHelpers(targetVal, value)
+        // do not update anything if the values are the same
+        // this is technically not required, because vue takes care of this as well:
+        if (targetVal === newVal) continue
+        // update just the nested value
+        const setParams = getSetParams(ref, path, newVal)
+        this._vm.$set(...setParams)
+      }
     },
     DELETE_DOC (state, id) {
       const s = state._conf.statePropName ? state[state._conf.statePropName] : state
