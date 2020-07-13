@@ -501,7 +501,7 @@ export default function (Firebase: any, appVersion: any): AnyObject {
     },
     applyHooksAndUpdateState ( // this is only on server retrievals
       {getters, state, commit, dispatch},
-      {change, id, doc = {}}: {change: 'added' | 'removed' | 'modified', id: string, doc: AnyObject}
+      {change, id, doc = {}, fromCache = false}: {change: 'added' | 'removed' | 'modified', id: string, doc: AnyObject, fromCache: boolean}
     ) {
       return new Promise((resolve, reject) => {
         const store = this
@@ -821,7 +821,8 @@ export default function (Firebase: any, appVersion: any): AnyObject {
                 // the initial load and the user may want to act on it differently
                 change: changeType || 'modified',
                 id: documentSnapshot.id,
-                doc: getters.cleanUpRetrievedDoc(documentSnapshot.data(), documentSnapshot.id)
+                doc: getters.cleanUpRetrievedDoc(documentSnapshot.data(), documentSnapshot.id),
+                fromCache: true
               })
               .then(() => promisePayload)
           }
@@ -856,7 +857,8 @@ export default function (Firebase: any, appVersion: any): AnyObject {
                 // if the document has not been loaded from cache before, this is an addition
                 //change: changeType || (initialPromise.isPending ? 'added' : 'modified'),
                 id: documentSnapshot.id,
-                doc: getters.cleanUpRetrievedDoc(documentSnapshot.data(), documentSnapshot.id)
+                doc: getters.cleanUpRetrievedDoc(documentSnapshot.data(), documentSnapshot.id),
+                fromCache: false
               })
               .then(() => promisePayload)
           }

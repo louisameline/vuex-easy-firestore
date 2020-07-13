@@ -20,6 +20,8 @@ export type IState = {
     }
     fetched: AnyObject
     stopPatchingTimeout: any
+    syncDownEnabled: boolean
+    syncUpEnabled: boolean
   }
   [key: string]: any
 }
@@ -49,7 +51,9 @@ export default function (): IState {
         rejects: [],
       },
       fetched: {},
-      stopPatchingTimeout: null
+      stopPatchingTimeout: null,
+      syncDownEnabled: false,
+      syncUpEnabled: false
     }
   }
 }
