@@ -19,6 +19,8 @@ export declare type IState = {
         };
         fetched: AnyObject;
         stopPatchingTimeout: any;
+        syncDownEnabled: boolean;
+        syncUpEnabled: boolean;
     };
     [key: string]: any;
 };

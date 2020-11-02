@@ -12,9 +12,11 @@ require('firebase/firestore');
 var isWhat = require('is-what');
 var copy = _interopDefault(require('copy-anything'));
 var merge = _interopDefault(require('merge-anything'));
+var flatten = require('flatten-anything');
+var flatten__default = _interopDefault(flatten);
+var pathToProp = _interopDefault(require('path-to-prop'));
 var findAndReplaceAnything = require('find-and-replace-anything');
 var filter = _interopDefault(require('filter-anything'));
-var flatten = _interopDefault(require('flatten-anything'));
 
 function initialState() {
     return {
@@ -718,7 +720,9 @@ function pluginState () {
                 rejects: [],
             },
             fetched: {},
-            stopPatchingTimeout: null
+            stopPatchingTimeout: null,
+            syncDownEnabled: false,
+            syncUpEnabled: false
         }
     };
 }
@@ -2841,6 +2845,37 @@ function isIncrementHelper(payload) {
         payload.isIncrementHelper === true);
 }
 
+function convertHelpers(originVal, newVal) {
+    if (isWhat.isArray(originVal) && isArrayHelper(newVal)) {
+        newVal = newVal.executeOn(originVal);
+    }
+    if (isWhat.isNumber(originVal) && isIncrementHelper(newVal)) {
+        newVal = newVal.executeOn(originVal);
+    }
+    return newVal; // always return newVal as fallback!!
+}
+/**
+ * Creates the params needed to $set a target based on a nested.path
+ *
+ * @param {object} target
+ * @param {string} path
+ * @param {*} value
+ * @returns {[object, string, any]}
+ */
+function getSetParams(target, path, value) {
+    var _a;
+    var pathParts = path.split('.');
+    var prop = pathParts.pop();
+    var pathParent = pathParts.join('.');
+    var objectToSetPropTo = pathToProp(target, pathParent);
+    if (!isWhat.isPlainObject(objectToSetPropTo)) {
+        // the target doesn't have an object ready at this level to set the value to
+        // so we need to step down a level and try again
+        return getSetParams(target, pathParent, (_a = {}, _a[prop] = value, _a));
+    }
+    var valueToSet = value;
+    return [objectToSetPropTo, prop, valueToSet];
+}
 /**
  * a function returning the mutations object
  *
@@ -2916,7 +2951,7 @@ function pluginMutations (userState) {
             }
         },
         PATCH_DOC: function (state, patches) {
-            var _this = this;
+            var _a;
             // Get the state prop ref
             var ref = (state._conf.statePropName)
                 ? state[state._conf.statePropName]
@@ -2930,21 +2965,19 @@ function pluginMutations (userState) {
                 Object.assign(state._metadata, patches._metadata);
                 delete patches._metadata;
             }
-            return Object.keys(patches).forEach(function (key) {
-                var newVal = patches[key];
-                // Merge if exists
-                function helpers(originVal, newVal) {
-                    if (isWhat.isArray(originVal) && isArrayHelper(newVal)) {
-                        newVal = newVal.executeOn(originVal);
-                    }
-                    if (isWhat.isNumber(originVal) && isIncrementHelper(newVal)) {
-                        newVal = newVal.executeOn(originVal);
-                    }
-                    return newVal; // always return newVal as fallback!!
-                }
-                newVal = merge({ extensions: [helpers] }, ref[key], patches[key]);
-                _this._vm.$set(ref, key, newVal);
-            });
+            var patchesFlat = flatten.flattenObject(patches);
+            for (var _i = 0, _b = Object.entries(patchesFlat); _i < _b.length; _i++) {
+                var _c = _b[_i], path = _c[0], value = _c[1];
+                var targetVal = pathToProp(ref, path);
+                var newVal = convertHelpers(targetVal, value);
+                // do not update anything if the values are the same
+                // this is technically not required, because vue takes care of this as well:
+                if (targetVal === newVal)
+                    continue;
+                // update just the nested value
+                var setParams = getSetParams(ref, path, newVal);
+                (_a = this._vm).$set.apply(_a, setParams);
+            }
         },
         DELETE_DOC: function (state, id) {
             var _this = this;
@@ -3803,10 +3836,14 @@ function pluginActions (Firebase, appVersion) {
                 // case we need to reset the state it won't have default values
                 submoduleConfig.state = merge(submoduleConfig.state, params.state);
             }
+            else {
+                // same here, we should not alter the default state
+                submoduleConfig.state = state[params.id];
+            }
             // TODO: this works for first level collections only, should be improved
             var modulePath = [state._conf.moduleName, params.id];
             // TODO: make sure everything is alright like at store init, this was a little simplified.
-            this.registerModule(modulePath, iniModule(submoduleConfig, Firebase, appVersion), { preserveState: params.state === null });
+            this.registerModule(modulePath, iniModule(submoduleConfig, Firebase, appVersion));
             state[params.id]._sync.id = params.id;
             // TODO: this should probably always be done by default by the lib
             dispatch(modulePath.join('/') + '/setPathVars', { moduleId: params.id }, { root: true });
@@ -3830,7 +3867,7 @@ function pluginActions (Firebase, appVersion) {
         _a, _b) {
             var _this = this;
             var getters = _a.getters, state = _a.state, commit = _a.commit, dispatch = _a.dispatch;
-            var change = _b.change, id = _b.id, _c = _b.doc, doc = _c === void 0 ? {} : _c;
+            var change = _b.change, id = _b.id, _c = _b.doc, doc = _c === void 0 ? {} : _c, _d = _b.fromCache;
             return new Promise(function (resolve, reject) {
                 var store = _this;
                 // define storeUpdateFn()
@@ -4121,7 +4158,8 @@ function pluginActions (Firebase, appVersion) {
                             // the initial load and the user may want to act on it differently
                             change: changeType || 'modified',
                             id: documentSnapshot.id,
-                            doc: getters.cleanUpRetrievedDoc(documentSnapshot.data(), documentSnapshot.id)
+                            doc: getters.cleanUpRetrievedDoc(documentSnapshot.data(), documentSnapshot.id),
+                            fromCache: true
                         })
                             .then(function () { return promisePayload; });
                     }
@@ -4146,7 +4184,8 @@ function pluginActions (Firebase, appVersion) {
                             // if the document has not been loaded from cache before, this is an addition
                             //change: changeType || (initialPromise.isPending ? 'added' : 'modified'),
                             id: documentSnapshot.id,
-                            doc: getters.cleanUpRetrievedDoc(documentSnapshot.data(), documentSnapshot.id)
+                            doc: getters.cleanUpRetrievedDoc(documentSnapshot.data(), documentSnapshot.id),
+                            fromCache: false
                         })
                             .then(function () { return promisePayload; });
                     }
@@ -4628,7 +4667,7 @@ function pluginGetters (Firebase, appVersion) {
                     //patchData.updated_by = state._sync.userId
                     // clean up item
                     var cleanedPatchData = filter(patchData, getters.fillables, getters.guard);
-                    var itemToUpdate = flatten(cleanedPatchData);
+                    var itemToUpdate = flatten__default(cleanedPatchData);
                     // add id (required to get ref later at apiHelpers.ts)
                     // @ts-ignore
                     //itemToUpdate.id = id
@@ -4764,14 +4803,6 @@ function pluginGetters (Firebase, appVersion) {
                 });
             });
         }; },
-        syncIsEnabled: function (state, getters, rootState, rootGetters) {
-            return state._conf.syncActivation === true
-                // TODO: this should not read from my custom config module, it should be stored
-                // properly by the lib
-                || (state._conf.syncActivation === 'global' && rootState.local.data.syncGloballyEnabled === true)
-                // the local activation should be stored outside the store
-                || (state._conf.syncActivation === 'local' && state._local.syncEnabled === true);
-        },
         submoduleIds: function (state) {
             var ids = [];
             Object.keys(state).forEach(function (key) {
@@ -4904,7 +4935,7 @@ function iniModule (userConfig, FirebaseDependency, appVersion) {
     }
     return {
         namespaced: true,
-        state: merge(pluginState(), restOfState, { _conf: conf }),
+        state: merge(pluginState(), restOfState, { _conf: conf, _metadata: {} }),
         mutations: merge(userMutations, pluginMutations(merge(userState, { _conf: conf }))),
         actions: merge(userActions, pluginActions(FirebaseDependency, appVersion)),
         getters: merge(userGetters, pluginGetters(FirebaseDependency, appVersion))
