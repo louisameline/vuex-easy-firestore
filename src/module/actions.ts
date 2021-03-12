@@ -747,6 +747,7 @@ export default function (Firebase: any, appVersion: any): AnyObject {
       }
 
       const initialPromise = nicePromise(),
+        insertedPromise = nicePromise(),
         refreshedPromise = nicePromise(),
         streamingPromise = nicePromise()
       
@@ -757,6 +758,7 @@ export default function (Firebase: any, appVersion: any): AnyObject {
         // error() callback
         state._sync.streaming[identifier] = streamingPromise
         initialPromise.resolve({
+          inserted: insertedPromise,
           refreshed: refreshedPromise,
           streaming: streamingPromise,
           stop: () => dispatch('closeDBChannel', { _identifier: identifier })
@@ -796,6 +798,7 @@ export default function (Firebase: any, appVersion: any): AnyObject {
         // the promise that this function returns always resolves with this object
         const promisePayload = {
           initialize: false,
+          insert: false,
           refresh: false,
           stop: null
         }
@@ -882,6 +885,7 @@ export default function (Firebase: any, appVersion: any): AnyObject {
               promise = dispatch('insertInitialDoc')
                 .then(() => {
                   promisePayload.initialize = true
+                  promisePayload.insert = true
                   promisePayload.refresh = true
                   
                   return promisePayload
@@ -981,6 +985,14 @@ export default function (Firebase: any, appVersion: any): AnyObject {
 
             if (resp.initialize && initialPromise.isPending) {
               streamingStart()
+            }
+            if(insertedPromise.isPending) {
+              if (resp.insert) {
+                insertedPromise.resolve()
+              }
+              else {
+                insertedPromise.reject()
+              }
             }
             if (resp.refresh && refreshedPromise.isPending) {
               if (parameters.fetchedCallback) {
